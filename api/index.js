@@ -1,4 +1,3 @@
-```javascript
 import express from "express";
 import cors from "cors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -138,4 +137,3 @@ app.listen(PORT, () => {
   console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
   console.log(`Message endpoint: http://localhost:${PORT}/message`);
 });
-```
