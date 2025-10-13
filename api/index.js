@@ -93,26 +93,26 @@ app.post("/message", async (req, res) => {
 
     let result;
 
-    if (method === "tools/list") {
-      result = await server.requestHandler(ListToolsRequestSchema, {
-        method: "tools/list",
-        params: {}
-      });
-    } else if (method === "tools/call") {
-      result = await server.requestHandler(CallToolRequestSchema, {
-        method: "tools/call",
-        params: {
-          name: params.name,
-          arguments: params.arguments || {}
-        }
-      });
-    } else {
-      return res.json({ 
-        jsonrpc: "2.0", 
-        id, 
-        error: { code: -32601, message: `Unknown method: ${method}` } 
-      });
+    if (method === "list_tools" || method === "tools/list") {
+  result = await server.requestHandler(ListToolsRequestSchema, {
+    method: "tools/list",
+    params: {}
+  });
+} else if (method === "call_tool" || method === "tools/call") {
+  result = await server.requestHandler(CallToolRequestSchema, {
+    method: "tools/call",
+    params: {
+      name: params.name,
+      arguments: params.arguments || {}
     }
+  });
+} else {
+  return res.json({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32601, message: Unknown method: ${method} }
+  });
+}
 
     res.json({ jsonrpc: "2.0", id, result });
   } catch (err) {
