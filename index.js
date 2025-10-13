@@ -68,36 +68,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 app.get("/sse", async (req, res) => {
   console.log("SSE connection initiated");
 
-  // --- Proper SSE headers ---
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders();
-
-  // --- Instantiate SSE transport ---
-  const transport = new SSEServerTransport("/message", res);
-
   try {
+    // ❌ DO NOT set headers manually here
+    // SSEServerTransport will handle them for you
+
+    // Initialize SSE transport (handles headers & streaming)
+    const transport = new SSEServerTransport("/message", res);
+
+    // Connect MCP server to the transport
     await server.connect(transport);
-    console.log("SSE transport connected");
+    console.log("✅ SSE transport connected");
 
-    // send an initial heartbeat so connector knows stream is alive
-    res.write(`: connected\n\n`);
-
-    // keepalive ping every 15s
+    // Optional heartbeat (keeps Render proxy alive)
     const keepAlive = setInterval(() => {
-      res.write(`: ping\n\n`);
+      try {
+        res.write(`: ping\n\n`);
+      } catch (err) {
+        console.warn("SSE ping failed:", err);
+        clearInterval(keepAlive);
+      }
     }, 15000);
 
+    // Handle client disconnect
     req.on("close", () => {
       clearInterval(keepAlive);
       console.log("SSE connection closed");
     });
   } catch (error) {
-    console.error("Error setting up SSE:", error);
-    if (!res.headersSent) res.status(500).end();
+    console.error("❌ Error setting up SSE:", error);
+
+    // Only respond if headers haven't been sent yet
+    if (!res.headersSent) {
+      res.status(500).end();
+    }
   }
 });
+
 
 // ✅ 4. message endpoint (handle JSON-RPC directly)
 app.post("/message", async (req, res) => {
