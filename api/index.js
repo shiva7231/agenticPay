@@ -45,11 +45,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "searchProducts") {
-    const q = request.params.arguments.query.toLowerCase();
+    const q = String(request.params.arguments?.query || "").toLowerCase();
     const results = products.filter((p) =>
       p.name.toLowerCase().includes(q)
     );
-
     return {
       content: [
         {
@@ -59,7 +58,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ],
     };
   }
-
   throw new Error(`Unknown tool: ${request.params.name}`);
 });
 
@@ -90,30 +88,59 @@ app.post("/message", async (req, res) => {
   try {
     console.log("Received message:", JSON.stringify(req.body, null, 2));
     const { method, params, id } = req.body;
-
+    
     let result;
-
+    
     if (method === "list_tools" || method === "tools/list") {
-  result = await server.requestHandler(ListToolsRequestSchema, {
-    method: "tools/list",
-    params: {}
-  });
-} else if (method === "call_tool" || method === "tools/call") {
-  result = await server.requestHandler(CallToolRequestSchema, {
-    method: "tools/call",
-    params: {
-      name: params.name,
-      arguments: params.arguments || {}
+      // Directly return the tools list
+      result = {
+        tools: [
+          {
+            name: "searchProducts",
+            description: "Search for products by name",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description: "Search query for product name",
+                },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      };
+    } else if (method === "call_tool" || method === "tools/call") {
+      // Handle tool calls
+      if (params?.name === "searchProducts") {
+        const q = String(params.arguments?.query || "").toLowerCase();
+        const results = products.filter((p) =>
+          p.name.toLowerCase().includes(q)
+        );
+        result = {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ results }, null, 2),
+            },
+          ],
+        };
+      } else {
+        return res.json({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32601, message: `Unknown tool: ${params?.name}` }
+        });
+      }
+    } else {
+      return res.json({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Unknown method: ${method}` }
+      });
     }
-  });
-} else {
-  return res.json({
-    jsonrpc: "2.0",
-    id,
-    error: { code: -32601, message: Unknown method: ${method} }
-  });
-}
-
+    
     res.json({ jsonrpc: "2.0", id, result });
   } catch (err) {
     console.error("Error in /message:", err);
