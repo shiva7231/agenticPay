@@ -64,24 +64,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 // ✅ 3. SSE endpoint (persistent stream)
-// Let SSEServerTransport handle ALL header writing
+// Note: SSE may not work properly on Vercel due to serverless limitations
 app.get("/sse", async (req, res) => {
   console.log("SSE connection initiated");
   
   try {
-    // Don't touch the response object at all - let the transport handle it
     const transport = new SSEServerTransport("/message", res);
     await server.connect(transport);
     
     console.log("SSE transport connected");
     
-    // Handle client disconnect
     req.on('close', () => {
       console.log('SSE connection closed');
     });
   } catch (error) {
     console.error("Error setting up SSE:", error);
-    // Only send error if headers haven't been sent yet
     if (!res.headersSent) {
       res.status(500).end();
     }
@@ -129,11 +126,24 @@ app.post("/message", async (req, res) => {
 });
 
 // ✅ 5. health check
-app.get("/", (req, res) => res.send("MCP Server running ✅"));
+app.get("/", (req, res) => res.json({ 
+  status: "MCP Server running ✅",
+  endpoints: {
+    health: "/",
+    message: "/message",
+    sse: "/sse (may have limitations on Vercel)"
+  }
+}));
 
-const PORT = 8000;
-app.listen(PORT, () => {
-  console.log(`MCP server running on http://localhost:${PORT}`);
-  console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
-  console.log(`Message endpoint: http://localhost:${PORT}/message`);
-});
+// ✅ 6. Export for Vercel (IMPORTANT!)
+export default app;
+
+// Local development server (ignored by Vercel)
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 8000;
+  app.listen(PORT, () => {
+    console.log(`MCP server running on http://localhost:${PORT}`);
+    console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
+    console.log(`Message endpoint: http://localhost:${PORT}/message`);
+  });
+}
