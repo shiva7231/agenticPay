@@ -67,66 +67,97 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // Let SSEServerTransport handle ALL header writing
 app.get("/sse", async (req, res) => {
   console.log("SSE connection initiated");
-  
+
+  // --- Proper SSE headers ---
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  // --- Instantiate SSE transport ---
+  const transport = new SSEServerTransport("/message", res);
+
   try {
-    // Don't touch the response object at all - let the transport handle it
-    const transport = new SSEServerTransport("/message", res);
     await server.connect(transport);
-    
     console.log("SSE transport connected");
-    
-    // Handle client disconnect
-    req.on('close', () => {
-      console.log('SSE connection closed');
+
+    // send an initial heartbeat so connector knows stream is alive
+    res.write(`: connected\n\n`);
+
+    // keepalive ping every 15s
+    const keepAlive = setInterval(() => {
+      res.write(`: ping\n\n`);
+    }, 15000);
+
+    req.on("close", () => {
+      clearInterval(keepAlive);
+      console.log("SSE connection closed");
     });
   } catch (error) {
     console.error("Error setting up SSE:", error);
-    // Only send error if headers haven't been sent yet
-    if (!res.headersSent) {
-      res.status(500).end();
-    }
+    if (!res.headersSent) res.status(500).end();
   }
 });
 
 // ✅ 4. message endpoint (handle JSON-RPC directly)
 app.post("/message", async (req, res) => {
   try {
-    console.log("Received message:", JSON.stringify(req.body, null, 2));
     const { method, params, id } = req.body;
+
+    console.log("🔹 Incoming message:", JSON.stringify(req.body, null, 2));
 
     let result;
 
-    if (method === "tools/list") {
-      result = await server.requestHandler(ListToolsRequestSchema, {
-        method: "tools/list",
-        params: {}
-      });
-    } else if (method === "tools/call") {
-      result = await server.requestHandler(CallToolRequestSchema, {
-        method: "tools/call",
-        params: {
-          name: params.name,
-          arguments: params.arguments || {}
-        }
-      });
-    } else {
-      return res.json({ 
-        jsonrpc: "2.0", 
-        id, 
-        error: { code: -32601, message: `Unknown method: ${method}` } 
-      });
+    switch (method) {
+      // Handle "tools/list" — ChatGPT connector requests this on connect
+      case "tools/list":
+        result = await server.requestHandler(ListToolsRequestSchema, {
+          method,
+          params: {},
+        });
+        break;
+
+      // Handle "tools/call" — when ChatGPT actually invokes your tool
+      case "tools/call":
+        result = await server.requestHandler(CallToolRequestSchema, {
+          method,
+          params,
+        });
+        break;
+
+      default:
+        // Unknown RPC method
+        return res.status(400).json({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32601,
+            message: `Unknown method: ${method}`,
+          },
+        });
     }
 
-    res.json({ jsonrpc: "2.0", id, result });
+    // ✅ Respond with standard JSON-RPC success
+    return res.json({
+      jsonrpc: "2.0",
+      id,
+      result,
+    });
   } catch (err) {
-    console.error("Error in /message:", err);
-    res.status(500).json({ 
-      jsonrpc: "2.0", 
-      id: req.body?.id, 
-      error: { code: -32603, message: err.message } 
+    console.error("❌ Error in /message:", err);
+
+    // Proper JSON-RPC error response
+    return res.status(500).json({
+      jsonrpc: "2.0",
+      id: req.body?.id,
+      error: {
+        code: -32603,
+        message: err.message || "Internal Server Error",
+      },
     });
   }
 });
+
 
 // ✅ 5. health check
 app.get("/", (req, res) => res.send("MCP Server running ✅"));
