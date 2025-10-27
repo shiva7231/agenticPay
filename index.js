@@ -107,6 +107,46 @@ app.get('/sse', (req, res) => {
     // Send initial connection message
     res.write('data: {"type":"connection","status":"connected"}\n\n');
 
+    // Send server capabilities
+    setTimeout(() => {
+        const capabilities = {
+            type: "capabilities",
+            capabilities: {
+                tools: [
+                    {
+                        name: "search",
+                        description: "Search through documents using a query string",
+                        inputSchema: {
+                            type: "object",
+                            properties: {
+                                query: {
+                                    type: "string",
+                                    description: "Search query"
+                                }
+                            },
+                            required: ["query"]
+                        }
+                    },
+                    {
+                        name: "fetch",
+                        description: "Fetch full content of a document by ID",
+                        inputSchema: {
+                            type: "object", 
+                            properties: {
+                                id: {
+                                    type: "string",
+                                    description: "Document ID"
+                                }
+                            },
+                            required: ["id"]
+                        }
+                    }
+                ]
+            }
+        };
+        res.write('data: ' + JSON.stringify(capabilities) + '\n\n');
+    }, 1000);
+
     // Keep connection alive with heartbeat
     const heartbeat = setInterval(() => {
         res.write('data: {"type":"heartbeat","timestamp":"' + new Date().toISOString() + '"}\n\n');
@@ -116,6 +156,96 @@ app.get('/sse', (req, res) => {
     req.on('close', () => {
         clearInterval(heartbeat);
     });
+});
+
+// POST endpoint for SSE-based MCP requests
+app.post('/sse', async (req, res) => {
+    try {
+        console.log('SSE POST request received:', JSON.stringify(req.body, null, 2));
+        
+        // Set SSE headers
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Cache-Control, Content-Type'
+        });
+
+        const { method, params } = req.body;
+        
+        if (method === 'tools/call') {
+            const { name, arguments: args } = params;
+            
+            if (name === 'search') {
+                const query = args.query.toLowerCase();
+                console.log('SSE Search query:', query);
+                
+                const results = dummyDocuments.filter(doc => 
+                    doc.title.toLowerCase().includes(query) ||
+                    doc.text.toLowerCase().includes(query) ||
+                    doc.metadata.tags.some(tag => tag.toLowerCase().includes(query))
+                ).map(doc => ({
+                    id: doc.id,
+                    title: doc.title,
+                    url: doc.url
+                }));
+
+                const response = {
+                    type: "tool_result",
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({ results })
+                    }]
+                };
+                
+                res.write('data: ' + JSON.stringify(response) + '\n\n');
+                
+            } else if (name === 'fetch') {
+                const docId = args.id;
+                console.log('SSE Fetch document:', docId);
+                
+                const document = dummyDocuments.find(doc => doc.id === docId);
+                
+                if (!document) {
+                    const errorResponse = {
+                        type: "error",
+                        error: { message: `Document with id ${docId} not found` }
+                    };
+                    res.write('data: ' + JSON.stringify(errorResponse) + '\n\n');
+                    res.end();
+                    return;
+                }
+
+                const response = {
+                    type: "tool_result",
+                    content: [{
+                        type: "text", 
+                        text: JSON.stringify({
+                            id: document.id,
+                            title: document.title,
+                            text: document.text,
+                            url: document.url,
+                            metadata: document.metadata
+                        })
+                    }]
+                };
+                
+                res.write('data: ' + JSON.stringify(response) + '\n\n');
+            }
+        }
+        
+        res.end();
+        
+    } catch (error) {
+        console.error('SSE POST Error:', error);
+        const errorResponse = {
+            type: "error", 
+            error: { message: 'Internal server error' }
+        };
+        res.write('data: ' + JSON.stringify(errorResponse) + '\n\n');
+        res.end();
+    }
 });
 
 // Main MCP endpoint for tool calls
