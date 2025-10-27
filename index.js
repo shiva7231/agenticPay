@@ -1,349 +1,282 @@
+// index.js
 const express = require('express');
 const cors = require('cors');
-const app = express();
+const crypto = require('crypto');
 
-// Enable CORS for all routes
+const app = express();
+app.use(express.json({ limit: '1mb' }));
+
+/**
+ * CORS: keep permissive for dev; tighten in prod.
+ * Streamable HTTP spec also recommends Origin validation. (You can restrict by env var.)
+ * Ref: MCP Streamable HTTP security notes.
+ */
 app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+  origin: (_origin, cb) => cb(null, true),
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id', 'MCP-Protocol-Version']
 }));
 
-app.use(express.json());
-
-// Dummy data for testing
+/** ---------- Dummy data ---------- */
 const dummyDocuments = [
-    {
-        id: "doc-1",
-        title: "Complete Guide to Node.js Development",
-        text: "Node.js is a powerful JavaScript runtime built on Chrome's V8 JavaScript engine. It allows developers to build scalable network applications using JavaScript on the server side. Key features include event-driven architecture, non-blocking I/O operations, and a rich ecosystem through npm. Popular frameworks include Express.js for web applications, Socket.io for real-time communication, and many others. Node.js is widely used for building APIs, microservices, and full-stack applications.",
-        url: "https://example.com/nodejs-guide",
-        metadata: {
-            author: "Tech Expert",
-            category: "Programming",
-            tags: ["javascript", "backend", "server"]
-        }
-    },
-    {
-        id: "doc-2", 
-        title: "Understanding RESTful APIs",
-        text: "REST (Representational State Transfer) is an architectural style for designing networked applications. RESTful APIs use standard HTTP methods like GET, POST, PUT, DELETE to perform operations on resources. Key principles include statelessness, uniform interface, cacheable responses, and layered system architecture. Best practices include proper status codes, consistent naming conventions, versioning, and comprehensive documentation. RESTful APIs are essential for modern web development and microservices architecture.",
-        url: "https://example.com/rest-api-guide",
-        metadata: {
-            author: "API Designer",
-            category: "Web Development", 
-            tags: ["api", "rest", "http"]
-        }
-    },
-    {
-        id: "doc-3",
-        title: "Database Design Fundamentals",
-        text: "Database design is crucial for application performance and scalability. Key concepts include normalization to reduce redundancy, proper indexing for query optimization, and choosing appropriate data types. Relational databases like PostgreSQL and MySQL follow ACID properties, while NoSQL databases like MongoDB offer flexibility for unstructured data. Consider factors like consistency requirements, scalability needs, and query patterns when choosing a database solution.",
-        url: "https://example.com/database-design",
-        metadata: {
-            author: "Database Expert",
-            category: "Database",
-            tags: ["sql", "nosql", "design"]
-        }
-    },
-    {
-        id: "doc-4",
-        title: "Modern JavaScript ES6+ Features",
-        text: "ES6 introduced many powerful features to JavaScript including arrow functions, template literals, destructuring assignment, and promises. ES2017 added async/await for better asynchronous programming. Other important features include modules for better code organization, classes for object-oriented programming, and new data structures like Map and Set. These features make JavaScript more powerful and developer-friendly for modern application development.",
-        url: "https://example.com/javascript-es6",
-        metadata: {
-            author: "JS Developer",
-            category: "Programming",
-            tags: ["javascript", "es6", "modern"]
-        }
-    },
-    {
-        id: "doc-5",
-        title: "Cloud Computing Basics", 
-        text: "Cloud computing provides on-demand access to computing resources over the internet. Main service models include IaaS (Infrastructure as a Service), PaaS (Platform as a Service), and SaaS (Software as a Service). Major providers like AWS, Azure, and Google Cloud offer various services including virtual machines, databases, storage, and serverless computing. Benefits include scalability, cost-effectiveness, and reduced infrastructure management overhead.",
-        url: "https://example.com/cloud-computing",
-        metadata: {
-            author: "Cloud Architect",
-            category: "Cloud Technology",
-            tags: ["cloud", "aws", "azure"]
-        }
-    }
+  {
+    id: "doc-1",
+    title: "Complete Guide to Node.js Development",
+    text: "Node.js is a powerful JavaScript runtime built on Chrome's V8 JavaScript engine...",
+    url: "https://example.com/nodejs-guide",
+    metadata: { author: "Tech Expert", category: "Programming", tags: ["javascript", "backend", "server"] }
+  },
+  {
+    id: "doc-2",
+    title: "Understanding RESTful APIs",
+    text: "REST (Representational State Transfer) is an architectural style...",
+    url: "https://example.com/rest-api-guide",
+    metadata: { author: "API Designer", category: "Web Development", tags: ["api", "rest", "http"] }
+  },
+  {
+    id: "doc-3",
+    title: "Database Design Fundamentals",
+    text: "Database design is crucial for application performance and scalability...",
+    url: "https://example.com/database-design",
+    metadata: { author: "Database Expert", category: "Database", tags: ["sql", "nosql", "design"] }
+  },
+  {
+    id: "doc-4",
+    title: "Modern JavaScript ES6+ Features",
+    text: "ES6 introduced many powerful features to JavaScript...",
+    url: "https://example.com/javascript-es6",
+    metadata: { author: "JS Developer", category: "Programming", tags: ["javascript", "es6", "modern"] }
+  },
+  {
+    id: "doc-5",
+    title: "Cloud Computing Basics",
+    text: "Cloud computing provides on-demand access to computing resources...",
+    url: "https://example.com/cloud-computing",
+    metadata: { author: "Cloud Architect", category: "Cloud Technology", tags: ["cloud", "aws", "azure"] }
+  }
 ];
 
-// Health check endpoint
+/** ---------- Utilities ---------- */
+const jsonrpcOk = (id, result) => ({ jsonrpc: '2.0', id, result });
+const jsonrpcErr = (id, code, message, data) => ({ jsonrpc: '2.0', id, error: { code, message, data } });
+const newSessionId = () => crypto.randomUUID();
+
+/** Session storage (in-memory) */
+const sessions = new Map();
+
+/** ---------- Health & simple info ---------- */
 app.get('/health', (req, res) => {
-    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// MCP Server Capabilities endpoint
 app.get('/capabilities', (req, res) => {
-    res.json({
-        capabilities: {
-            tools: [
-                {
-                    name: "search",
-                    description: "Search through documents using a query string"
-                },
-                {
-                    name: "fetch", 
-                    description: "Fetch full content of a document by ID"
-                }
-            ]
-        }
-    });
+  res.json({
+    capabilities: {
+      tools: [
+        { name: "search", description: "Search through documents using a query string" },
+        { name: "fetch",  description: "Fetch full content of a document by ID" }
+      ]
+    }
+  });
 });
 
-// SSE endpoint for MCP communication
+/** ---------- JSON-RPC handlers (shared) ---------- */
+function listTools() {
+  return {
+    tools: [
+      {
+        name: "search",
+        description: "Search through documents using a query string",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string", description: "Search query" } },
+          required: ["query"]
+        }
+      },
+      {
+        name: "fetch",
+        description: "Fetch full content of a document by ID",
+        inputSchema: {
+          type: "object",
+          properties: { id: { type: "string", description: "Document ID" } },
+          required: ["id"]
+        }
+      }
+    ]
+  };
+}
+
+function handleToolsCall(params) {
+  const { name, arguments: args } = params || {};
+  if (name === 'search') {
+    const q = (args?.query || '').toLowerCase();
+    const results = dummyDocuments.filter(d =>
+      d.title.toLowerCase().includes(q) ||
+      d.text.toLowerCase().includes(q) ||
+      d.metadata.tags.some(t => t.toLowerCase().includes(q))
+    ).map(d => ({ id: d.id, title: d.title, url: d.url }));
+    return { content: [{ type: 'text', text: JSON.stringify({ results }) }] };
+  }
+  if (name === 'fetch') {
+    const id = args?.id;
+    const doc = dummyDocuments.find(d => d.id === id);
+    if (!doc) throw { code: -32004, message: `Document with id ${id} not found` };
+    return { content: [{ type: 'text', text: JSON.stringify(doc) }] };
+  }
+  throw { code: -32601, message: `Unknown tool: ${name}` };
+}
+
+/** ---------- Streamable HTTP transport (modern) ----------
+ * Single MCP endpoint that supports:
+ *   - POST: JSON-RPC request/notification/response
+ *   - GET: optional SSE stream for server->client notifications
+ * Spec: modelcontextprotocol.io Streamable HTTP (2025-06-18)
+ */
+app.post('/mcp', (req, res) => {
+  // Recommended: advertise protocol version negotiation
+  res.setHeader('MCP-Protocol-Version', '2025-06-18');
+
+  const { jsonrpc, id, method, params } = req.body || {};
+  if (jsonrpc !== '2.0') {
+    return res.status(400).json(jsonrpcErr(null, -32600, 'Invalid Request'));
+  }
+
+  try {
+    // Initialize: create a session and return capabilities
+    if (method === 'initialize') {
+      const sid = newSessionId();
+      sessions.set(sid, { createdAt: Date.now() });
+      res.setHeader('Mcp-Session-Id', sid);
+      return res.json(jsonrpcOk(id, {
+        protocolVersion: '2025-06-18',
+        capabilities: { tools: { list: true, call: true } }
+      }));
+    }
+
+    // tools/list
+    if (method === 'tools/list') {
+      return res.json(jsonrpcOk(id, listTools()));
+    }
+
+    // tools/call
+    if (method === 'tools/call') {
+      const result = handleToolsCall(params);
+      return res.json(jsonrpcOk(id, result));
+    }
+
+    // Optional ping
+    if (method === 'ping') {
+      return res.json(jsonrpcOk(id, { now: new Date().toISOString() }));
+    }
+
+    return res.json(jsonrpcErr(id, -32601, `Unknown method: ${method}`));
+  } catch (e) {
+    const { code = -32000, message = 'Internal server error', data } = e || {};
+    return res.json(jsonrpcErr(id, code, message, data));
+  }
+});
+
+// Optional: GET /mcp opens an SSE stream for unsolicited server->client notifications (not required).
+app.get('/mcp', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Access-Control-Allow-Origin': '*'
+  });
+  res.flushHeaders?.();
+
+  // Example: send a capabilities notification
+  const note = {
+    jsonrpc: '2.0',
+    method: 'notifications/capabilities',
+    params: listTools()
+  };
+  res.write(`event: message\n`);
+  res.write(`data: ${JSON.stringify(note)}\n\n`);
+
+  const keepalive = setInterval(() => res.write(`: ping ${Date.now()}\n\n`), 15000);
+  req.on('close', () => clearInterval(keepalive));
+});
+
+/** ---------- Legacy HTTP+SSE transport shim ----------
+ * Some clients still attempt the deprecated transport.
+ * Requirements:
+ *   - GET /sse must first emit:  event: endpoint  data: {"url":"<POST url>"}
+ *   - POST /sse accepts JSON-RPC and replies with JSON-RPC (usually application/json).
+ * Spec: legacy HTTP+SSE & backwards-compat guidance.
+ */
 app.get('/sse', (req, res) => {
-    // Set headers for SSE
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Cache-Control'
-    });
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'X-Accel-Buffering': 'no'
+  });
+  res.flushHeaders?.();
 
-    // Send initial connection message
-    res.write('data: {"type":"connection","status":"connected"}\n\n');
+  // REQUIRED first event for legacy clients
+  const postUrl = `${req.protocol}://${req.get('host')}/sse`;
+  res.write(`event: endpoint\n`);
+  res.write(`data: ${JSON.stringify({ url: postUrl })}\n\n`);
 
-    // Send server capabilities
-    setTimeout(() => {
-        const capabilities = {
-            type: "capabilities",
-            capabilities: {
-                tools: [
-                    {
-                        name: "search",
-                        description: "Search through documents using a query string",
-                        inputSchema: {
-                            type: "object",
-                            properties: {
-                                query: {
-                                    type: "string",
-                                    description: "Search query"
-                                }
-                            },
-                            required: ["query"]
-                        }
-                    },
-                    {
-                        name: "fetch",
-                        description: "Fetch full content of a document by ID",
-                        inputSchema: {
-                            type: "object", 
-                            properties: {
-                                id: {
-                                    type: "string",
-                                    description: "Document ID"
-                                }
-                            },
-                            required: ["id"]
-                        }
-                    }
-                ]
-            }
-        };
-        res.write('data: ' + JSON.stringify(capabilities) + '\n\n');
-    }, 1000);
+  // Optional: immediate capabilities as JSON-RPC notification on "message"
+  const capabilitiesMsg = {
+    jsonrpc: '2.0',
+    method: 'notifications/capabilities',
+    params: listTools()
+  };
+  res.write(`event: message\n`);
+  res.write(`data: ${JSON.stringify(capabilitiesMsg)}\n\n`);
 
-    // Keep connection alive with heartbeat
-    const heartbeat = setInterval(() => {
-        res.write('data: {"type":"heartbeat","timestamp":"' + new Date().toISOString() + '"}\n\n');
-    }, 30000);
-
-    // Clean up on client disconnect
-    req.on('close', () => {
-        clearInterval(heartbeat);
-    });
+  const keepalive = setInterval(() => res.write(`: ping ${Date.now()}\n\n`), 15000);
+  req.on('close', () => clearInterval(keepalive));
 });
 
-// POST endpoint for SSE-based MCP requests
-app.post('/sse', async (req, res) => {
-    try {
-        console.log('SSE POST request received:', JSON.stringify(req.body, null, 2));
-        
-        // Set SSE headers
-        res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Cache-Control, Content-Type'
-        });
-
-        const { method, params } = req.body;
-        
-        if (method === 'tools/call') {
-            const { name, arguments: args } = params;
-            
-            if (name === 'search') {
-                const query = args.query.toLowerCase();
-                console.log('SSE Search query:', query);
-                
-                const results = dummyDocuments.filter(doc => 
-                    doc.title.toLowerCase().includes(query) ||
-                    doc.text.toLowerCase().includes(query) ||
-                    doc.metadata.tags.some(tag => tag.toLowerCase().includes(query))
-                ).map(doc => ({
-                    id: doc.id,
-                    title: doc.title,
-                    url: doc.url
-                }));
-
-                const response = {
-                    type: "tool_result",
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({ results })
-                    }]
-                };
-                
-                res.write('data: ' + JSON.stringify(response) + '\n\n');
-                
-            } else if (name === 'fetch') {
-                const docId = args.id;
-                console.log('SSE Fetch document:', docId);
-                
-                const document = dummyDocuments.find(doc => doc.id === docId);
-                
-                if (!document) {
-                    const errorResponse = {
-                        type: "error",
-                        error: { message: `Document with id ${docId} not found` }
-                    };
-                    res.write('data: ' + JSON.stringify(errorResponse) + '\n\n');
-                    res.end();
-                    return;
-                }
-
-                const response = {
-                    type: "tool_result",
-                    content: [{
-                        type: "text", 
-                        text: JSON.stringify({
-                            id: document.id,
-                            title: document.title,
-                            text: document.text,
-                            url: document.url,
-                            metadata: document.metadata
-                        })
-                    }]
-                };
-                
-                res.write('data: ' + JSON.stringify(response) + '\n\n');
-            }
-        }
-        
-        res.end();
-        
-    } catch (error) {
-        console.error('SSE POST Error:', error);
-        const errorResponse = {
-            type: "error", 
-            error: { message: 'Internal server error' }
-        };
-        res.write('data: ' + JSON.stringify(errorResponse) + '\n\n');
-        res.end();
+app.post('/sse', (req, res) => {
+  const { jsonrpc, id, method, params } = req.body || {};
+  if (jsonrpc !== '2.0') {
+    return res.status(400).json(jsonrpcErr(null, -32600, 'Invalid Request'));
+  }
+  try {
+    if (method === 'initialize') {
+      // Legacy servers may or may not track sessions; keep simple here.
+      return res.json(jsonrpcOk(id, {
+        protocolVersion: '2024-11-05',
+        capabilities: { tools: { list: true, call: true } }
+      }));
     }
-});
-
-// Main MCP endpoint for tool calls
-app.post('/mcp', async (req, res) => {
-    try {
-        const { method, params } = req.body;
-        
-        console.log('Received MCP request:', { method, params });
-
-        if (method === 'tools/call') {
-            const { name, arguments: args } = params;
-            
-            if (name === 'search') {
-                const query = args.query.toLowerCase();
-                console.log('Search query:', query);
-                
-                // Search through documents
-                const results = dummyDocuments.filter(doc => 
-                    doc.title.toLowerCase().includes(query) ||
-                    doc.text.toLowerCase().includes(query) ||
-                    doc.metadata.tags.some(tag => tag.toLowerCase().includes(query))
-                ).map(doc => ({
-                    id: doc.id,
-                    title: doc.title,
-                    url: doc.url
-                }));
-
-                const response = {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({ results })
-                    }]
-                };
-                
-                console.log('Search results:', results.length);
-                res.json(response);
-                
-            } else if (name === 'fetch') {
-                const docId = args.id;
-                console.log('Fetch document:', docId);
-                
-                const document = dummyDocuments.find(doc => doc.id === docId);
-                
-                if (!document) {
-                    return res.status(404).json({
-                        error: { message: `Document with id ${docId} not found` }
-                    });
-                }
-
-                const response = {
-                    content: [{
-                        type: "text", 
-                        text: JSON.stringify({
-                            id: document.id,
-                            title: document.title,
-                            text: document.text,
-                            url: document.url,
-                            metadata: document.metadata
-                        })
-                    }]
-                };
-                
-                console.log('Fetched document:', document.title);
-                res.json(response);
-                
-            } else {
-                res.status(400).json({
-                    error: { message: `Unknown tool: ${name}` }
-                });
-            }
-        } else {
-            res.status(400).json({
-                error: { message: `Unknown method: ${method}` }
-            });
-        }
-    } catch (error) {
-        console.error('Error processing MCP request:', error);
-        res.status(500).json({
-            error: { message: 'Internal server error' }
-        });
+    if (method === 'tools/list') {
+      return res.json(jsonrpcOk(id, listTools()));
     }
+    if (method === 'tools/call')) {
+      const result = handleToolsCall(params);
+      return res.json(jsonrpcOk(id, result));
+    }
+    return res.json(jsonrpcErr(id, -32601, `Unknown method: ${method}`));
+  } catch (e) {
+    const { code = -32000, message = 'Internal server error', data } = e || {};
+    return res.json(jsonrpcErr(id, code, message, data));
+  }
 });
 
-// Handle preflight requests
+/** ---------- Preflight ---------- */
 app.options('*', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.sendStatus(200);
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version');
+  res.sendStatus(200);
 });
 
+/** ---------- Start ---------- */
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MCP Server running on port ${PORT}`);
-    console.log(`Health check: http://localhost:${PORT}/health`);
-    console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
-    console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
+  console.log(`MCP Server running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`Modern MCP endpoint: http://localhost:${PORT}/mcp (POST/GET)`);
+  console.log(`Legacy SSE endpoint: http://localhost:${PORT}/sse (GET + POST)`);
 });
 
 module.exports = app;
