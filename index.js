@@ -21,41 +21,347 @@ app.use(cors({
 /** -------- Dummy data -------- */
 const dummyDocuments = [
   {
-    id: "doc-1",
-    title: "Complete Guide to Node.js Development",
-    text: "Node.js is a powerful JavaScript runtime built on Chrome's V8 JavaScript engine. It allows developers to build scalable network applications using JavaScript on the server side. Key features include event-driven architecture, non-blocking I/O operations, and a rich ecosystem through npm. Popular frameworks include Express.js for web applications, Socket.io for real-time communication, and many others. Node.js is widely used for building APIs, microservices, and full-stack applications.",
-    url: "https://example.com/nodejs-guide",
-    metadata: { author: "Tech Expert", category: "Programming", tags: ["javascript", "backend", "server"] }
+    id: "prod-1",
+    title: "Basmati Rice 5kg",
+    text: "Premium long-grain basmati rice (5kg). Ideal for daily cooking and biryani. Price ₹549, often discounted. Category: Staples.",
+    url: "https://www.pinelabs.com/products/basmati-rice-5kg",
+    metadata: {
+      brand: "Everyday Harvest",
+      category: "Grocery > Staples",
+      sku: "RICE-BAS-5KG",
+      unitSize: "5 kg",
+      priceInINR: 549,
+      mrpInINR: 599,
+      discountPercent: 8,
+      inStock: true,
+      tags: ["grocery", "staples", "rice", "basmati", "5kg"]
+    }
   },
   {
-    id: "doc-2",
-    title: "Understanding RESTful APIs",
-    text: "REST (Representational State Transfer) is an architectural style for designing networked applications. RESTful APIs use standard HTTP methods like GET, POST, PUT, DELETE to perform operations on resources. Key principles include statelessness, uniform interface, cacheable responses, and layered system architecture. Best practices include proper status codes, consistent naming conventions, versioning, and comprehensive documentation. RESTful APIs are essential for modern web development and microservices architecture.",
-    url: "https://example.com/rest-api-guide",
-    metadata: { author: "API Designer", category: "Web Development", tags: ["api", "rest", "http"] }
+    id: "prod-2",
+    title: "Whole Wheat Atta 10kg",
+    text: "Stone-ground whole wheat atta (10kg) for soft rotis. Price ₹449. Rich in fiber. Category: Staples.",
+    url: "https://www.pinelabs.com/products/atta-10kg",
+    metadata: {
+      brand: "GrainMill",
+      category: "Grocery > Staples",
+      sku: "ATTA-WW-10KG",
+      unitSize: "10 kg",
+      priceInINR: 449,
+      mrpInINR: 499,
+      discountPercent: 10,
+      inStock: true,
+      tags: ["grocery", "staples", "atta", "wheat", "10kg", "flour"]
+    }
   },
   {
-    id: "doc-3",
-    title: "Database Design Fundamentals",
-    text: "Database design is crucial for application performance and scalability. Key concepts include normalization to reduce redundancy, proper indexing for query optimization, and choosing appropriate data types. Relational databases like PostgreSQL and MySQL follow ACID properties, while NoSQL databases like MongoDB offer flexibility for unstructured data. Consider factors like consistency requirements, scalability needs, and query patterns when choosing a database solution.",
-    url: "https://example.com/database-design",
-    metadata: { author: "Database Expert", category: "Database", tags: ["sql", "nosql", "design"] }
+    id: "prod-3",
+    title: "Toor Dal 1kg",
+    text: "Unpolished toor/arhar dal (1kg). Protein-rich lentils. Price ₹169. Category: Pulses.",
+    url: "https://www.pinelabs.com/products/toor-dal-1kg",
+    metadata: {
+      brand: "PulsePro",
+      category: "Grocery > Pulses",
+      sku: "DAL-TOOR-1KG",
+      unitSize: "1 kg",
+      priceInINR: 169,
+      mrpInINR: 189,
+      discountPercent: 11,
+      inStock: true,
+      tags: ["grocery", "pulses", "dal", "toor", "arhar", "1kg"]
+    }
   },
   {
-    id: "doc-4",
-    title: "Modern JavaScript ES6+ Features",
-    text: "ES6 introduced many powerful features to JavaScript including arrow functions, template literals, destructuring assignment, and promises. ES2017 added async/await for better asynchronous programming. Other important features include modules for better code organization, classes for object-oriented programming, and new data structures like Map and Set. These features make JavaScript more powerful and developer-friendly for modern application development.",
-    url: "https://example.com/javascript-es6",
-    metadata: { author: "JS Developer", category: "Programming", tags: ["javascript", "es6", "modern"] }
+    id: "prod-4",
+    title: "Refined Sunflower Oil 1L",
+    text: "Light refined sunflower oil (1L) for everyday cooking. Price ₹139. Category: Oils.",
+    url: "https://www.pinelabs.com/products/sunflower-oil-1l",
+    metadata: {
+      brand: "SunLite",
+      category: "Grocery > Oils",
+      sku: "OIL-SUN-1L",
+      unitSize: "1 L",
+      priceInINR: 139,
+      mrpInINR: 155,
+      discountPercent: 10,
+      inStock: true,
+      tags: ["grocery", "oil", "sunflower", "1l", "cooking"]
+    }
   },
   {
-    id: "doc-5",
-    title: "Cloud Computing Basics",
-    text: "Cloud computing provides on-demand access to computing resources over the internet. Main service models include IaaS, PaaS, and SaaS. Major providers like AWS, Azure, and Google Cloud offer services including VMs, databases, storage, and serverless computing. Benefits include scalability, cost-effectiveness, and reduced infrastructure management overhead.",
-    url: "https://example.com/cloud-computing",
-    metadata: { author: "Cloud Architect", category: "Cloud Technology", tags: ["cloud", "aws", "azure"] }
+    id: "prod-5",
+    title: "Granulated Sugar 1kg",
+    text: "Fine granulated sugar (1kg). Price ₹48. Category: Staples.",
+    url: "https://www.pinelabs.com/products/sugar-1kg",
+    metadata: {
+      brand: "SweetLeaf",
+      category: "Grocery > Staples",
+      sku: "SUG-REG-1KG",
+      unitSize: "1 kg",
+      priceInINR: 48,
+      mrpInINR: 55,
+      discountPercent: 13,
+      inStock: true,
+      tags: ["grocery", "sugar", "staples", "1kg"]
+    }
+  },
+  {
+    id: "prod-6",
+    title: "Iodized Salt 1kg",
+    text: "Iodized table salt (1kg). Price ₹22. Category: Staples.",
+    url: "https://www.pinelabs.com/products/salt-1kg",
+    metadata: {
+      brand: "PureSalt",
+      category: "Grocery > Staples",
+      sku: "SALT-IOD-1KG",
+      unitSize: "1 kg",
+      priceInINR: 22,
+      mrpInINR: 25,
+      discountPercent: 12,
+      inStock: true,
+      tags: ["grocery", "salt", "staples", "1kg", "iodized"]
+    }
+  },
+  {
+    id: "prod-7",
+    title: "Toned Milk 1L (UHT)",
+    text: "Long-life UHT toned milk (1L). No refrigeration required before opening. Price ₹62. Category: Dairy.",
+    url: "https://www.pinelabs.com/products/toned-milk-1l",
+    metadata: {
+      brand: "MilkyWay",
+      category: "Grocery > Dairy",
+      sku: "MILK-UHT-1L",
+      unitSize: "1 L",
+      priceInINR: 62,
+      mrpInINR: 64,
+      discountPercent: 3,
+      inStock: true,
+      tags: ["grocery", "dairy", "milk", "uht", "1l"]
+    }
+  },
+  {
+    id: "prod-8",
+    title: "Plain Curd 400g",
+    text: "Fresh plain dahi/curd (400g) with active cultures. Price ₹38. Category: Dairy.",
+    url: "https://www.pinelabs.com/products/curd-400g",
+    metadata: {
+      brand: "MilkyWay",
+      category: "Grocery > Dairy",
+      sku: "CURD-PLN-400G",
+      unitSize: "400 g",
+      priceInINR: 38,
+      mrpInINR: 40,
+      discountPercent: 5,
+      inStock: true,
+      tags: ["grocery", "dairy", "curd", "dahi", "400g"]
+    }
+  },
+  {
+    id: "prod-9",
+    title: "Salted Butter 500g",
+    text: "Creamy salted butter (500g). Ideal for cooking and baking. Price ₹285. Category: Dairy.",
+    url: "https://www.pinelabs.com/products/butter-500g",
+    metadata: {
+      brand: "CreamCraft",
+      category: "Grocery > Dairy",
+      sku: "BUT-SALT-500G",
+      unitSize: "500 g",
+      priceInINR: 285,
+      mrpInINR: 299,
+      discountPercent: 5,
+      inStock: true,
+      tags: ["grocery", "dairy", "butter", "500g", "salted"]
+    }
+  },
+  {
+    id: "prod-10",
+    title: "CTC Tea 500g",
+    text: "Strong Assam CTC tea (500g) for a robust cup. Price ₹189. Category: Beverages.",
+    url: "https://www.pinelabs.com/products/ctc-tea-500g",
+    metadata: {
+      brand: "Leaf&Co",
+      category: "Grocery > Beverages",
+      sku: "TEA-CTC-500G",
+      unitSize: "500 g",
+      priceInINR: 189,
+      mrpInINR: 210,
+      discountPercent: 10,
+      inStock: true,
+      tags: ["grocery", "tea", "ctc", "assam", "beverage", "500g"]
+    }
+  },
+  {
+    id: "prod-11",
+    title: "Instant Coffee 200g",
+    text: "100% coffee, freeze-dried granules (200g). Price ₹299. Category: Beverages.",
+    url: "https://www.pinelabs.com/products/coffee-200g",
+    metadata: {
+      brand: "BrewFast",
+      category: "Grocery > Beverages",
+      sku: "COF-INS-200G",
+      unitSize: "200 g",
+      priceInINR: 299,
+      mrpInINR: 349,
+      discountPercent: 14,
+      inStock: true,
+      tags: ["grocery", "coffee", "beverage", "instant", "200g"]
+    }
+  },
+  {
+    id: "prod-12",
+    title: "Masala Biscuits Family Pack",
+    text: "Crispy masala-flavored biscuits, family pack (600g). Price ₹95. Category: Snacks.",
+    url: "https://www.pinelabs.com/products/masala-biscuits-family",
+    metadata: {
+      brand: "SnackMate",
+      category: "Grocery > Snacks",
+      sku: "BISC-MASA-600G",
+      unitSize: "600 g",
+      priceInINR: 95,
+      mrpInINR: 110,
+      discountPercent: 14,
+      inStock: true,
+      tags: ["grocery", "snacks", "biscuits", "family pack", "masala"]
+    }
+  },
+  {
+    id: "prod-13",
+    title: "Rolled Oats 1kg",
+    text: "High-fiber rolled oats (1kg) for healthy breakfasts. Price ₹159. Category: Breakfast & Cereals.",
+    url: "https://www.pinelabs.com/products/oats-1kg",
+    metadata: {
+      brand: "FitStart",
+      category: "Grocery > Breakfast",
+      sku: "OATS-ROL-1KG",
+      unitSize: "1 kg",
+      priceInINR: 159,
+      mrpInINR: 199,
+      discountPercent: 20,
+      inStock: true,
+      tags: ["grocery", "oats", "breakfast", "cereal", "1kg", "healthy"]
+    }
+  },
+  {
+    id: "prod-14",
+    title: "Turmeric Powder 200g",
+    text: "Pure haldi powder (200g). Deep color and aroma. Price ₹69. Category: Spices.",
+    url: "https://www.pinelabs.com/products/turmeric-200g",
+    metadata: {
+      brand: "SpiceWorks",
+      category: "Grocery > Spices",
+      sku: "SPC-TURM-200G",
+      unitSize: "200 g",
+      priceInINR: 69,
+      mrpInINR: 79,
+      discountPercent: 13,
+      inStock: true,
+      tags: ["grocery", "spices", "turmeric", "haldi", "200g"]
+    }
+  },
+  {
+    id: "prod-15",
+    title: "Red Chili Powder 200g",
+    text: "Hot and vibrant red chili powder (200g). Price ₹89. Category: Spices.",
+    url: "https://www.pinelabs.com/products/red-chili-200g",
+    metadata: {
+      brand: "SpiceWorks",
+      category: "Grocery > Spices",
+      sku: "SPC-CHIL-200G",
+      unitSize: "200 g",
+      priceInINR: 89,
+      mrpInINR: 99,
+      discountPercent: 10,
+      inStock: true,
+      tags: ["grocery", "spices", "chili", "lal mirch", "200g"]
+    }
+  },
+  {
+    id: "prod-16",
+    title: "Cumin Seeds 100g",
+    text: "Whole cumin/jeera seeds (100g). Strong aroma. Price ₹49. Category: Spices.",
+    url: "https://www.pinelabs.com/products/cumin-100g",
+    metadata: {
+      brand: "SpiceWorks",
+      category: "Grocery > Spices",
+      sku: "SPC-CUMIN-100G",
+      unitSize: "100 g",
+      priceInINR: 49,
+      mrpInINR: 55,
+      discountPercent: 11,
+      inStock: true,
+      tags: ["grocery", "spices", "cumin", "jeera", "100g"]
+    }
+  },
+  {
+    id: "prod-17",
+    title: "Onion 1kg (Fresh)",
+    text: "Fresh onions (1kg). Daily vegetables. Price ₹34. Category: Produce.",
+    url: "https://www.pinelabs.com/products/onion-1kg",
+    metadata: {
+      brand: "FarmFresh",
+      category: "Grocery > Produce",
+      sku: "VEG-ONION-1KG",
+      unitSize: "1 kg",
+      priceInINR: 34,
+      mrpInINR: 39,
+      discountPercent: 13,
+      inStock: true,
+      tags: ["grocery", "vegetables", "produce", "onion", "pyaaz", "1kg"]
+    }
+  },
+  {
+    id: "prod-18",
+    title: "Tomato 1kg (Fresh)",
+    text: "Ripe red tomatoes (1kg). Price ₹42. Category: Produce.",
+    url: "https://www.pinelabs.com/products/tomato-1kg",
+    metadata: {
+      brand: "FarmFresh",
+      category: "Grocery > Produce",
+      sku: "VEG-TOM-1KG",
+      unitSize: "1 kg",
+      priceInINR: 42,
+      mrpInINR: 48,
+      discountPercent: 12,
+      inStock: true,
+      tags: ["grocery", "vegetables", "produce", "tomato", "tamatar", "1kg"]
+    }
+  },
+  {
+    id: "prod-19",
+    title: "Potato 5kg (Fresh)",
+    text: "Clean potatoes (5kg). Daily staple. Price ₹135. Category: Produce.",
+    url: "https://www.pinelabs.com/products/potato-5kg",
+    metadata: {
+      brand: "FarmFresh",
+      category: "Grocery > Produce",
+      sku: "VEG-POT-5KG",
+      unitSize: "5 kg",
+      priceInINR: 135,
+      mrpInINR: 159,
+      discountPercent: 15,
+      inStock: true,
+      tags: ["grocery", "vegetables", "produce", "potato", "aloo", "5kg"]
+    }
+  },
+  {
+    id: "prod-20",
+    title: "Dishwash Liquid 500ml (Lemon)",
+    text: "Grease-cutting dishwash liquid (500ml), lemon fragrance. Price ₹69. Category: Household.",
+    url: "https://www.pinelabs.com/products/dishwash-500ml",
+    metadata: {
+      brand: "CleanDrop",
+      category: "Household",
+      sku: "HOME-DWASH-500ML",
+      unitSize: "500 ml",
+      priceInINR: 69,
+      mrpInINR: 79,
+      discountPercent: 13,
+      inStock: true,
+      tags: ["household", "cleaning", "dishwash", "lemon", "500ml"]
+    }
   }
 ];
+
 
 /** -------- Small helpers -------- */
 const jsonrpcOk   = (id, result) => ({ jsonrpc: '2.0', id, result });
