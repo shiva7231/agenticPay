@@ -1,4 +1,5 @@
-// server.mjs
+// server.mjs  (ESM)
+// If you use index.mjs, just paste this there; start command must run that file.
 import express from "express";
 import cors from "cors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -24,7 +25,7 @@ const mcpServer = new Server(
   { capabilities: { tools: {} } }
 );
 
-// These handlers are used when ChatGPT talks over the **SSE** transport:
+// SSE transport handlers (used when client communicates over the stream)
 mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -58,6 +59,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function sseHandler(req, res) {
   console.log("SSE connection initiated");
 
+  // Build absolute /message URL (important for clients/proxies)
   const proto =
     req.headers["x-forwarded-proto"]?.toString() || req.protocol || "https";
   const host = req.headers["x-forwarded-host"]?.toString() || req.headers.host;
@@ -69,6 +71,7 @@ async function sseHandler(req, res) {
     await mcpServer.connect(transport);
     console.log("✅ SSE transport connected");
 
+    // keepalive pings as SSE comments
     const keepAlive = setInterval(() => {
       try {
         res.write(`: ping\n\n`);
@@ -97,22 +100,27 @@ app.post("/message", async (req, res) => {
     const { method, params, id } = req.body || {};
     console.log("🔹 Incoming /message:", JSON.stringify(req.body, null, 2));
 
-    // Notifications (no response)
+    // Notifications (no response body)
     if (!id && typeof method === "string" && method.startsWith("notifications/")) {
       return res.status(204).end();
     }
 
-    // 1) initialize (REQUIRED)
+    // 1) initialize — echo client's protocolVersion (critical for ChatGPT)
     if (method === "initialize") {
+      const requested =
+        params?.protocolVersion ||
+        params?.clientInfo?.protocolVersion ||
+        "2025-03-26";
+
       const result = {
-        protocolVersion: "2025-05-31",
+        protocolVersion: requested,
         capabilities: { tools: {} },
         serverInfo: { name: "agentic-pay-server", version: "1.0.0" },
       };
       return res.json({ jsonrpc: "2.0", id, result });
     }
 
-    // 2) optional list endpoints
+    // 2) optional lists (some clients probe these)
     if (method === "resources/list") {
       return res.json({ jsonrpc: "2.0", id, result: { resources: [] } });
     }
@@ -120,7 +128,7 @@ app.post("/message", async (req, res) => {
       return res.json({ jsonrpc: "2.0", id, result: { prompts: [] } });
     }
 
-    // 3) tools/list — build response directly (no mcpServer.requestHandler)
+    // 3) tools/list — build response directly
     if (method === "tools/list") {
       const result = {
         tools: [
