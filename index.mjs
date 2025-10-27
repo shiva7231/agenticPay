@@ -18,13 +18,13 @@ const products = [
   { id: "atta002", name: "Fortune Atta", price: 250 },
 ];
 
-// ---- MCP server -------------------------------------------------------------
+// ---- MCP server for SSE transport ------------------------------------------
 const mcpServer = new Server(
   { name: "agentic-pay-server", version: "1.0.0" },
   { capabilities: { tools: {} } }
 );
 
-// Register MCP tool handlers for the SSE transport path
+// These handlers are used when ChatGPT talks over the **SSE** transport:
 mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -44,7 +44,9 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
 mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "searchProducts") {
     const q = String(request.params.arguments?.query ?? "").toLowerCase();
-    const results = products.filter((p) => p.name.toLowerCase().includes(q));
+    const results = products.filter((p) =>
+      p.name.toLowerCase().includes(q)
+    );
     return {
       content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }],
     };
@@ -52,12 +54,10 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   throw new Error(`Unknown tool: ${request.params.name}`);
 });
 
-// ---- SSE endpoint (legacy HTTP+SSE transport) -------------------------------
-// Only standard MCP `event: endpoint` (transport emits it). No extra data on handshake.
+// ---- SSE endpoint (legacy HTTP+SSE) ----------------------------------------
 async function sseHandler(req, res) {
   console.log("SSE connection initiated");
 
-  // Build absolute /message URL (works behind Render/other proxies)
   const proto =
     req.headers["x-forwarded-proto"]?.toString() || req.protocol || "https";
   const host = req.headers["x-forwarded-host"]?.toString() || req.headers.host;
@@ -69,7 +69,6 @@ async function sseHandler(req, res) {
     await mcpServer.connect(transport);
     console.log("✅ SSE transport connected");
 
-    // keepalive pings
     const keepAlive = setInterval(() => {
       try {
         res.write(`: ping\n\n`);
@@ -90,33 +89,30 @@ async function sseHandler(req, res) {
 }
 
 app.get("/sse", sseHandler);
-app.get("/sse/", sseHandler); // accept trailing slash too
+app.get("/sse/", sseHandler);
 
-// ---- JSON-RPC endpoint ------------------------------------------------------
-// ChatGPT will POST here after reading `event: endpoint`
+// ---- JSON-RPC endpoint (manual handling) -----------------------------------
 app.post("/message", async (req, res) => {
   try {
     const { method, params, id } = req.body || {};
     console.log("🔹 Incoming /message:", JSON.stringify(req.body, null, 2));
 
-    // 0) JSON-RPC notification (no id) — acknowledge and return 204
+    // Notifications (no response)
     if (!id && typeof method === "string" && method.startsWith("notifications/")) {
-      // e.g. "notifications/initialized"
       return res.status(204).end();
     }
 
-    // 1) initialize — REQUIRED for clients like ChatGPT
+    // 1) initialize (REQUIRED)
     if (method === "initialize") {
-      // Minimal but valid initialize response
       const result = {
-        protocolVersion: "2025-05-31",           // a recent MCP protocol date string
-        capabilities: { tools: {} },             // we expose tools
+        protocolVersion: "2025-05-31",
+        capabilities: { tools: {} },
         serverInfo: { name: "agentic-pay-server", version: "1.0.0" },
       };
       return res.json({ jsonrpc: "2.0", id, result });
     }
 
-    // 2) Optional: many clients probe these — return empty arrays
+    // 2) optional list endpoints
     if (method === "resources/list") {
       return res.json({ jsonrpc: "2.0", id, result: { resources: [] } });
     }
@@ -124,24 +120,50 @@ app.post("/message", async (req, res) => {
       return res.json({ jsonrpc: "2.0", id, result: { prompts: [] } });
     }
 
-    // 3) tools/list and tools/call — delegate to the MCP server handlers
+    // 3) tools/list — build response directly (no mcpServer.requestHandler)
     if (method === "tools/list") {
-      const result = await mcpServer.requestHandler(ListToolsRequestSchema, {
-        method,
-        params: {},
-      });
+      const result = {
+        tools: [
+          {
+            name: "searchProducts",
+            description: "Search for products by name",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description: "Search query for product name",
+                },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      };
       return res.json({ jsonrpc: "2.0", id, result });
     }
 
+    // 4) tools/call — implement tool logic directly
     if (method === "tools/call") {
-      const result = await mcpServer.requestHandler(CallToolRequestSchema, {
-        method,
-        params,
+      const toolName = params?.name;
+      if (toolName === "searchProducts") {
+        const q = String(params?.arguments?.query ?? "").toLowerCase();
+        const results = products.filter((p) =>
+          p.name.toLowerCase().includes(q)
+        );
+        const result = {
+          content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }],
+        };
+        return res.json({ jsonrpc: "2.0", id, result });
+      }
+      return res.status(400).json({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Unknown tool: ${toolName}` },
       });
-      return res.json({ jsonrpc: "2.0", id, result });
     }
 
-    // 4) Unknown method
+    // 5) Unknown method
     return res.status(400).json({
       jsonrpc: "2.0",
       id,
