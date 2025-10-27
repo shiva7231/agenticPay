@@ -238,29 +238,34 @@ app.get('/sse', (req, res) => {
 app.post('/sse', (req, res) => {
   const { jsonrpc, id, method, params } = req.body || {};
   if (jsonrpc !== '2.0') {
-    return res.status(400).json(jsonrpcErr(null, -32600, 'Invalid Request'));
+    return res.status(400).json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
   }
   try {
     if (method === 'initialize') {
-      // Legacy servers may or may not track sessions; keep simple here.
-      return res.json(jsonrpcOk(id, {
-        protocolVersion: '2024-11-05',
-        capabilities: { tools: { list: true, call: true } }
-      }));
+      return res.json({
+        jsonrpc: '2.0',
+        id,
+        result: { protocolVersion: '2024-11-05', capabilities: { tools: { list: true, call: true } } }
+      });
     }
+
     if (method === 'tools/list') {
-      return res.json(jsonrpcOk(id, listTools()));
+      return res.json({ jsonrpc: '2.0', id, result: listTools() });
     }
-    if (method === 'tools/call')) {
+
+    // ✅ fixed line below
+    if (method === 'tools/call') {
       const result = handleToolsCall(params);
-      return res.json(jsonrpcOk(id, result));
+      return res.json({ jsonrpc: '2.0', id, result });
     }
-    return res.json(jsonrpcErr(id, -32601, `Unknown method: ${method}`));
+
+    return res.json({ jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown method: ${method}` } });
   } catch (e) {
     const { code = -32000, message = 'Internal server error', data } = e || {};
-    return res.json(jsonrpcErr(id, code, message, data));
+    return res.json({ jsonrpc: '2.0', id, error: { code, message, data } });
   }
 });
+
 
 /** ---------- Preflight ---------- */
 app.options('*', (req, res) => {
