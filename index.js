@@ -18,7 +18,7 @@ app.use(cors({
   ]
 }));
 
-/** -------- Grocery catalog (dummy data) -------- */
+/** -------- Minimal catalog (add more later) -------- */
 const catalog = [
   {
     id: "prod-1",
@@ -367,12 +367,12 @@ const jsonrpcOk   = (id, result) => ({ jsonrpc: '2.0', id, result });
 const jsonrpcErr  = (id, code, message, data) => ({ jsonrpc: '2.0', id, error: { code, message, data } });
 const newSessionId = () => crypto.randomUUID();
 
-/** Sessions + carts (per-session in-memory) */
-const sessions = new Map();         // sid -> { createdAt }
-const carts = new Map();            // sid -> Map<productId, qty>
+const sessions   = new Map();            // sid -> { createdAt }
+const carts      = new Map();            // sid -> Map<productId, qty>
+const lastOrders = new Map();            // sid -> { orderId, totalInINR, items }
 
 function getSidFromHeaders(req) {
-  return req.header('Mcp-Session-Id') || req.header('MCP-SESSION-ID') || null;
+  return req.header('Mcp-Session-Id') || req.header('MCP-SESSION-ID') || 'anonymous';
 }
 function ensureCart(sid) {
   if (!carts.has(sid)) carts.set(sid, new Map());
@@ -394,22 +394,40 @@ function matchesTokens(doc, tokens) {
     doc.metadata?.category || '',
     doc.metadata?.sku || ''
   ].join(' ').toLowerCase();
-  return tokens.some(t => hay.includes(t)); // OR matching across tokens
+  return tokens.some(t => hay.includes(t)); // OR match
 }
 function filterCatalog({ q, category, priceMin, priceMax, inStock }) {
   const tokens = tokenize(q);
   return catalog.filter(d => {
-    if (!matchesTokens(d, tokens)) return false;
-    if (category && !String(d.metadata?.category || '').toLowerCase().includes(String(category).toLowerCase())) return false;
+    const hasStructuredFilters =
+      (category && category.length) ||
+      (typeof priceMin === 'number') ||
+      (typeof priceMax === 'number') ||
+      (typeof inStock === 'boolean');
+
+    if (!hasStructuredFilters && !matchesTokens(d, tokens)) return false;
+
+    if (category && !String(d.metadata?.category || '').toLowerCase().includes(String(category).toLowerCase()))
+      return false;
+
     const price = d.metadata?.priceInINR ?? Number.MAX_SAFE_INTEGER;
     if (typeof priceMin === 'number' && price < priceMin) return false;
     if (typeof priceMax === 'number' && price > priceMax) return false;
+
     if (typeof inStock === 'boolean' && Boolean(d.metadata?.inStock) !== inStock) return false;
+
     return true;
   });
 }
 function summarize(doc) {
-  return { id: doc.id, title: doc.title, url: doc.url, priceInINR: doc.metadata?.priceInINR, unitSize: doc.metadata?.unitSize, inStock: doc.metadata?.inStock };
+  return {
+    id: doc.id,
+    title: doc.title,
+    url: doc.url,
+    priceInINR: doc.metadata?.priceInINR,
+    unitSize: doc.metadata?.unitSize,
+    inStock: doc.metadata?.inStock
+  };
 }
 
 /** -------- Health -------- */
@@ -422,14 +440,14 @@ function toolsDefinition() {
   return {
     tools: [
       {
-        name: "inventory/list",
+        name: "inventory_list",
         title: "List inventory",
-        description: "List grocery items with optional filters.",
+        description: "List grocery items with optional filters. Examples: 'show items under 100', 'list dairy under 100 in-stock'.",
         inputSchema: {
           type: "object",
           properties: {
-            q: { type: "string", description: "Query text (e.g., 'milk salt spices')" },
-            category: { type: "string", description: "Category substring (e.g., 'Dairy' or 'Grocery > Spices')" },
+            q: { type: "string", description: "Free-text query e.g. 'milk salt spices'" },
+            category: { type: "string", description: "Substring e.g. 'Dairy' or 'Grocery > Spices'" },
             priceMin: { type: "number", description: "Minimum price in INR" },
             priceMax: { type: "number", description: "Maximum price in INR" },
             inStock: { type: "boolean", description: "Only in-stock items if true" }
@@ -438,70 +456,78 @@ function toolsDefinition() {
         },
         outputSchema: {
           type: "object",
-          properties: {
-            results: { type: "array", items: { type: "object" } }
-          },
+          properties: { results: { type: "array", items: { type: "object" } } },
           required: ["results"],
           additionalProperties: false
         }
       },
       {
-        name: "search",
+        name: "product_search",
         title: "Search items",
-        description: "Search items by keywords (token OR match).",
+        description: "Keyword search (token OR match). Detects numbers as price ceilings. Examples: 'buy curd milk', 'under 100', 'spices below 90'.",
         inputSchema: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Free-text search, e.g., 'buy curd milk salt'." }
+            query: { type: "string", description: "Free-text, e.g. 'milk under 100'." }
           },
           required: ["query"],
           additionalProperties: false
         }
       },
       {
-        name: "fetch",
+        name: "product_fetch",
         title: "Fetch item details",
-        description: "Fetch full details of a product by ID.",
+        description: "Fetch full details of a product by ID (e.g., prod-7).",
         inputSchema: {
           type: "object",
-          properties: {
-            id: { type: "string", description: "Product ID (e.g., prod-7)" }
-          },
+          properties: { id: { type: "string", description: "Product ID" } },
           required: ["id"],
           additionalProperties: false
         }
       },
       {
-        name: "cart/add",
+        name: "cart_add",
         title: "Add to cart",
-        description: "Add an item to the session cart.",
+        description: "Add an item to the cart. Use id or a name. Examples: 'add prod-7 qty 2', 'add milk', 'add toned milk 1l qty 3'.",
         inputSchema: {
           type: "object",
           properties: {
-            id: { type: "string", description: "Product ID" },
+            id:  { type: "string", description: "Product ID (preferred)" },
+            name:{ type: "string", description: "Fallback name/keywords if ID not provided" },
             qty: { type: "integer", minimum: 1, default: 1 }
           },
-          required: ["id"],
           additionalProperties: false
         }
       },
       {
-        name: "cart/get",
+        name: "cart_get",
         title: "Get cart",
-        description: "Get the current session cart summary.",
+        description: "Show current cart summary with totals.",
         inputSchema: { type: "object", additionalProperties: false }
       },
       {
-        name: "cart/clear",
+        name: "cart_clear",
         title: "Clear cart",
         description: "Remove all items from the cart.",
         inputSchema: { type: "object", additionalProperties: false }
       },
       {
-        name: "checkout/create_order",
+        name: "checkout_create_order",
         title: "Create order (mock)",
-        description: "Create a mock order from the cart and compute totals.",
+        description: "Create a mock order from the cart (say 'proceed to checkout', 'place order').",
         inputSchema: { type: "object", additionalProperties: false }
+      },
+      {
+        name: "checkout_pay",
+        title: "Pay for order (mock)",
+        description: "Complete payment for the most recent order (say 'proceed to pay', 'pay now').",
+        inputSchema: {
+          type: "object",
+          properties: {
+            orderId: { type: "string", description: "Optional; if absent, uses last order in session" }
+          },
+          additionalProperties: false
+        }
       }
     ]
   };
@@ -520,30 +546,22 @@ function tool_inventory_list(args) {
   return { content: [{ type: 'text', text: JSON.stringify({ results: list }) }] };
 }
 
-function tool_search(args) {
+function tool_product_search(args) {
   const q = args?.query || '';
 
-  // --- detect numeric value for price filtering ---
+  // numeric price ceiling detection (e.g., "under 100")
   let priceMax;
-  const numericMatch = q.match(/\d+/); // e.g. "under rupees 100" -> 100
-  if (numericMatch) {
-    priceMax = parseInt(numericMatch[0], 10);
-  }
+  const m = q.match(/\d+/);
+  if (m) priceMax = parseInt(m[0], 10);
 
-  // IMPORTANT: agar priceMax mila hai to token-based text filter ko hata do
-  // taaki "under 100" jaisi queries tokens ("under","rupees") ki wajah se fail na hon.
+  // if price filter present, don't force token matching
   const qForFilter = (typeof priceMax === 'number') ? '' : q;
 
   const list = filterCatalog({ q: qForFilter, priceMax }).map(summarize);
-
-  return {
-    content: [{ type: 'text', text: JSON.stringify({ results: list }) }]
-  };
+  return { content: [{ type: 'text', text: JSON.stringify({ results: list }) }] };
 }
 
-
-
-function tool_fetch(args) {
+function tool_product_fetch(args) {
   const id = args?.id;
   const doc = catalog.find(d => d.id === id);
   if (!doc) throw { code: -32004, message: `Product with id ${id} not found` };
@@ -551,14 +569,29 @@ function tool_fetch(args) {
 }
 
 function tool_cart_add(args, sid) {
-  const id = args?.id;
+  let { id, name } = args || {};
   const qty = Math.max(1, parseInt(args?.qty || 1, 10));
-  const doc = catalog.find(d => d.id === id);
-  if (!doc) throw { code: -32004, message: `Product with id ${id} not found` };
+
+  let doc;
+  if (id) {
+    doc = catalog.find(d => d.id === id);
+  } else if (name) {
+    const q = name.toLowerCase();
+    doc = catalog.find(d =>
+      d.title.toLowerCase().includes(q) ||
+      d.text.toLowerCase().includes(q) ||
+      (d.metadata?.brand || '').toLowerCase().includes(q) ||
+      (d.metadata?.category || '').toLowerCase().includes(q) ||
+      (d.metadata?.tags || []).some(t => t.toLowerCase().includes(q))
+    );
+  }
+  if (!doc) throw { code: -32004, message: `Product not found (provide 'id' or a matching 'name')` };
+
   const cart = ensureCart(sid);
-  const prev = cart.get(id) || 0;
-  cart.set(id, prev + qty);
-  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', added: { id, qty }, cartSize: cart.size }) }] };
+  const prev = cart.get(doc.id) || 0;
+  cart.set(doc.id, prev + qty);
+
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', added: { id: doc.id, title: doc.title, qty } }) }] };
 }
 
 function tool_cart_get(_args, sid) {
@@ -601,8 +634,8 @@ function tool_checkout_create_order(_args, sid) {
   const shippingInINR = subtotal >= 499 ? 0 : 30;
   const totalInINR = subtotal + shippingInINR;
 
-  // clear cart after order creation (mock)
-  carts.set(sid, new Map());
+  carts.set(sid, new Map()); // clear cart after order (mock)
+  lastOrders.set(sid, { orderId, totalInINR, items });
 
   return {
     content: [{
@@ -619,24 +652,42 @@ function tool_checkout_create_order(_args, sid) {
   };
 }
 
+function tool_checkout_pay(args, sid) {
+  const requestedId = args?.orderId;
+  const last = lastOrders.get(sid);
+
+  const orderId = requestedId || last?.orderId;
+  if (!orderId) throw { code: -32011, message: 'No recent order to pay for. Create order first.' };
+
+  const txnId = 'TXN-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const paidAt = new Date().toISOString();
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({ orderId, transactionId: txnId, paidAt, status: 'PAID (MOCK)' })
+    }]
+  };
+}
+
 /** -------- Dispatcher -------- */
-function handleToolsCall(methodName, params, sid) {
+function handleToolsCall(_methodName, params, sid) {
   const { name, arguments: args } = params || {};
   switch (name) {
-    case 'inventory/list': return tool_inventory_list(args);
-    case 'search': return tool_search(args);
-    case 'fetch': return tool_fetch(args);
-    case 'cart/add': return tool_cart_add(args, sid);
-    case 'cart/get': return tool_cart_get(args, sid);
-    case 'cart/clear': return tool_cart_clear(args, sid);
-    case 'checkout/create_order': return tool_checkout_create_order(args, sid);
+    case 'inventory_list':         return tool_inventory_list(args);
+    case 'product_search':         return tool_product_search(args);
+    case 'product_fetch':          return tool_product_fetch(args);
+    case 'cart_add':               return tool_cart_add(args, sid);
+    case 'cart_get':               return tool_cart_get(args, sid);
+    case 'cart_clear':             return tool_cart_clear(args, sid);
+    case 'checkout_create_order':  return tool_checkout_create_order(args, sid);
+    case 'checkout_pay':           return tool_checkout_pay(args, sid);
     default: throw { code: -32601, message: `Unknown tool: ${name}` };
   }
 }
 
 /** -------- Streamable HTTP (modern) at /mcp -------- */
 app.post('/mcp', (req, res) => {
-  // Advertise/echo protocol version header (optional but nice)
   res.setHeader('MCP-Protocol-Version', '2025-06-18');
 
   const { jsonrpc, id, method, params } = req.body || {};
@@ -658,7 +709,7 @@ app.post('/mcp', (req, res) => {
         protocolVersion,
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server', version: '1.0.0' },
-        instructions: 'Use inventory/list, search, fetch, cart/*, and checkout/create_order.'
+        instructions: 'Use inventory_list, product_search, product_fetch, cart_* and checkout_* tools.'
       }));
     }
 
@@ -667,7 +718,7 @@ app.post('/mcp', (req, res) => {
     }
 
     if (method === 'tools/call') {
-      const sid = getSidFromHeaders(req) || 'anonymous';
+      const sid = getSidFromHeaders(req);
       const result = handleToolsCall(method, params, sid);
       return res.json(jsonrpcOk(id, result));
     }
@@ -736,7 +787,7 @@ app.post('/sse', (req, res) => {
         protocolVersion: '2024-11-05',
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server (Legacy)', version: '1.0.0' },
-        instructions: 'Use inventory/list, search, fetch, cart/*, and checkout/create_order.'
+        instructions: 'Use inventory_list, product_search, product_fetch, cart_* and checkout_* tools.'
       }));
     }
     if (method === 'tools/list') {
