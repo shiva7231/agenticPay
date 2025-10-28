@@ -1,29 +1,21 @@
 {
-  "name": "mcp-server-nodejs",
+  "name": "agentic-pay-mcp",
   "version": "1.0.0",
-  "description": "Node.js MCP Server for ChatGPT Integration",
+  "description": "Quick Commerce MCP Server Demo",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
+  "keywords": [
+    "mcp",
+    "commerce",
+    "shopping"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  },
-  "keywords": [
-    "mcp",
-    "chatgpt",
-    "openai",
-    "connector",
-    "api"
-  ],
-  "author": "Your Name",
-  "license": "MIT",
-  "engines": {
-    "node": ">=14.0.0"
   }
 }
