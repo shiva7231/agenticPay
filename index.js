@@ -1,6 +1,7 @@
 // index.js
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -17,8 +18,8 @@ app.use(cors({
   ]
 }));
 
-/** -------- Product Catalog -------- */
-const products = [
+/** -------- Grocery catalog (dummy data) -------- */
+const catalog = [
   {
     id: "prod-1",
     title: "Basmati Rice 5kg",
@@ -361,489 +362,262 @@ const products = [
   }
 ];
 
-
-/** -------- Small helpers -------- */
+/** -------- Helpers -------- */
 const jsonrpcOk   = (id, result) => ({ jsonrpc: '2.0', id, result });
 const jsonrpcErr  = (id, code, message, data) => ({ jsonrpc: '2.0', id, error: { code, message, data } });
+const newSessionId = () => crypto.randomUUID();
 
-/** -------- Global Cart and Orders (Simple - No Sessions) -------- */
-const globalCart = { items: [] };
-const globalOrders = [];
+/** Sessions + carts (per-session in-memory) */
+const sessions = new Map();         // sid -> { createdAt }
+const carts = new Map();            // sid -> Map<productId, qty>
 
-/** -------- Helper Functions -------- */
-
-// Generate unique order ID
-function generateOrderId() {
-  return `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+function getSidFromHeaders(req) {
+  return req.header('Mcp-Session-Id') || req.header('MCP-SESSION-ID') || null;
+}
+function ensureCart(sid) {
+  if (!carts.has(sid)) carts.set(sid, new Map());
+  return carts.get(sid);
+}
+function tokenize(q) {
+  return (q || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean);
+}
+function matchesTokens(doc, tokens) {
+  if (!tokens.length) return true;
+  const hay = [
+    doc.title,
+    doc.text,
+    ...(doc.metadata?.tags || []),
+    doc.metadata?.brand || '',
+    doc.metadata?.category || '',
+    doc.metadata?.sku || ''
+  ].join(' ').toLowerCase();
+  return tokens.some(t => hay.includes(t)); // OR matching across tokens
+}
+function filterCatalog({ q, category, priceMin, priceMax, inStock }) {
+  const tokens = tokenize(q);
+  return catalog.filter(d => {
+    if (!matchesTokens(d, tokens)) return false;
+    if (category && !String(d.metadata?.category || '').toLowerCase().includes(String(category).toLowerCase())) return false;
+    const price = d.metadata?.priceInINR ?? Number.MAX_SAFE_INTEGER;
+    if (typeof priceMin === 'number' && price < priceMin) return false;
+    if (typeof priceMax === 'number' && price > priceMax) return false;
+    if (typeof inStock === 'boolean' && Boolean(d.metadata?.inStock) !== inStock) return false;
+    return true;
+  });
+}
+function summarize(doc) {
+  return { id: doc.id, title: doc.title, url: doc.url, priceInINR: doc.metadata?.priceInINR, unitSize: doc.metadata?.unitSize, inStock: doc.metadata?.inStock };
 }
 
-// Calculate cart summary with pricing details
-function calculateCartSummary(cartItems) {
-  let subtotal = 0;
-  let totalMrp = 0;
-  let totalSavings = 0;
-  let itemCount = 0;
-
-  for (const item of cartItems) {
-    const lineTotal = item.unitPrice * item.quantity;
-    const lineMrp = item.unitMrp * item.quantity;
-
-    subtotal += lineTotal;
-    totalMrp += lineMrp;
-    itemCount += item.quantity;
-  }
-
-  totalSavings = totalMrp - subtotal;
-
-  return {
-    subtotal,
-    totalMrp,
-    totalSavings,
-    finalAmount: subtotal,
-    itemCount
-  };
-}
-
-// Get cart with full product details
-function getCartWithDetails() {
-  const cartItems = globalCart.items;
-
-  const itemsWithDetails = cartItems.map(cartItem => {
-    const product = products.find(p => p.id === cartItem.productId);
-    if (!product) {
-      // Skip items for products that no longer exist
-      return null;
-    }
-
-    return {
-      productId: product.id,
-      title: product.title,
-      quantity: cartItem.quantity,
-      unitPrice: product.metadata.priceInINR,
-      unitMrp: product.metadata.mrpInINR,
-      lineTotal: product.metadata.priceInINR * cartItem.quantity,
-      lineSavings: (product.metadata.mrpInINR - product.metadata.priceInINR) * cartItem.quantity
-    };
-  }).filter(item => item !== null);
-
-  const summary = calculateCartSummary(itemsWithDetails);
-
-  return {
-    items: itemsWithDetails,
-    summary
-  };
-}
-
-/** -------- Health & info -------- */
+/** -------- Health -------- */
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-app.get('/capabilities', (req, res) => {
-  res.json({
-    capabilities: {
-      tools: [
-        {
-          name: "search_products",
-          description: "Search through a catalog of Indian grocery products. Returns matching products with ID, title, and URL."
-        },
-        {
-          name: "get_product_details",
-          description: "Retrieve complete information about a specific grocery product by its ID including pricing, brand, category, and stock availability."
-        },
-        {
-          name: "add_to_cart",
-          description: "Add a grocery product to the shopping cart with specified quantity. Validates stock and returns updated cart summary."
-        },
-        {
-          name: "remove_from_cart",
-          description: "Remove a product completely from the shopping cart. Returns updated cart summary."
-        },
-        {
-          name: "get_cart",
-          description: "View current shopping cart contents with full details including items, quantities, prices, and totals."
-        },
-        {
-          name: "clear_cart",
-          description: "Empty the entire shopping cart, removing all items."
-        },
-        {
-          name: "checkout",
-          description: "Process checkout and create a completed order from cart contents. Returns order ID and clears cart."
-        },
-        {
-          name: "get_order_summary",
-          description: "Retrieve details of a previously completed order by its order ID."
-        }
-      ]
-    }
-  });
-});
-
-/** -------- Cart Handler Functions -------- */
-
-// Add product to cart
-function handleAddToCart(productId, quantity) {
-  if (!productId) {
-    throw { code: -32002, message: 'Product ID is required' };
-  }
-
-  if (!quantity || quantity < 1) {
-    throw { code: -32003, message: 'Quantity must be a positive integer' };
-  }
-
-  // Validate product exists
-  const product = products.find(p => p.id === productId);
-  if (!product) {
-    throw { code: -32004, message: `Product with id ${productId} not found` };
-  }
-
-  // Check stock availability
-  if (!product.metadata.inStock) {
-    throw { code: -32005, message: `Product ${product.title} is currently out of stock` };
-  }
-
-  // Check if product already in cart
-  const existingItem = globalCart.items.find(item => item.productId === productId);
-
-  if (existingItem) {
-    // Add to existing quantity
-    existingItem.quantity += quantity;
-  } else {
-    // Add new item
-    globalCart.items.push({ productId, quantity });
-  }
-
-  // Get updated cart details
-  const cartDetails = getCartWithDetails();
-
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        success: true,
-        message: `Added ${quantity}x ${product.title} to cart`,
-        cart: cartDetails
-      })
-    }]
-  };
-}
-
-// Remove product from cart
-function handleRemoveFromCart(productId) {
-  if (!productId) {
-    throw { code: -32002, message: 'Product ID is required' };
-  }
-
-  const itemIndex = globalCart.items.findIndex(item => item.productId === productId);
-
-  if (itemIndex === -1) {
-    throw { code: -32006, message: `Product ${productId} not found in cart` };
-  }
-
-  // Get product title before removing
-  const product = products.find(p => p.id === productId);
-  const productTitle = product ? product.title : productId;
-
-  // Remove item
-  globalCart.items.splice(itemIndex, 1);
-
-  // Get updated cart details
-  const cartDetails = getCartWithDetails();
-
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        success: true,
-        message: `Removed ${productTitle} from cart`,
-        cart: cartDetails
-      })
-    }]
-  };
-}
-
-// Get cart details
-function handleGetCart() {
-  const cartDetails = getCartWithDetails();
-
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify(cartDetails)
-    }]
-  };
-}
-
-// Clear cart
-function handleClearCart() {
-  const itemCount = globalCart.items.length;
-
-  globalCart.items = [];
-
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        success: true,
-        message: `Cart cleared. Removed ${itemCount} item(s).`
-      })
-    }]
-  };
-}
-
-// Checkout and create order
-function handleCheckout() {
-  // Validate cart is not empty
-  if (globalCart.items.length === 0) {
-    throw { code: -32007, message: 'Cannot checkout with empty cart' };
-  }
-
-  // Get cart details
-  const cartDetails = getCartWithDetails();
-
-  // Create order
-  const orderId = generateOrderId();
-  const order = {
-    orderId,
-    items: cartDetails.items,
-    summary: cartDetails.summary,
-    orderDate: new Date().toISOString(),
-    status: 'completed'
-  };
-
-  // Save order
-  globalOrders.push(order);
-
-  // Clear cart
-  globalCart.items = [];
-
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        success: true,
-        message: 'Order placed successfully!',
-        order
-      })
-    }]
-  };
-}
-
-// Get order summary
-function handleGetOrderSummary(orderId) {
-  if (!orderId) {
-    throw { code: -32002, message: 'Order ID is required' };
-  }
-
-  const order = globalOrders.find(o => o.orderId === orderId);
-
-  if (!order) {
-    throw { code: -32008, message: `Order ${orderId} not found` };
-  }
-
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify(order)
-    }]
-  };
-}
-
-/** -------- Shared MCP logic -------- */
+/** -------- MCP tools definition -------- */
 function toolsDefinition() {
   return {
     tools: [
       {
-        name: "search_products",
-        title: "Search Grocery Products",
-        description: "Search through a catalog of Indian grocery products including staples (rice, atta, dal), dairy products, beverages, spices, fresh produce, and household items. The search query will match against product titles, descriptions, and tags. Returns a list of matching products with their ID, title, and URL. Use this to discover products based on keywords like 'rice', 'dairy', 'spices', 'vegetables', brand names, or specific items like 'basmati', 'milk', 'turmeric'. The catalog contains 20 products across categories: Grocery > Staples, Grocery > Pulses, Grocery > Oils, Grocery > Dairy, Grocery > Beverages, Grocery > Snacks, Grocery > Breakfast, Grocery > Spices, Grocery > Produce, and Household.",
+        name: "inventory/list",
+        title: "List inventory",
+        description: "List grocery items with optional filters.",
         inputSchema: {
           type: "object",
           properties: {
-            query: {
-              type: "string",
-              description: "Search query text to find products. Can be a product name (e.g., 'rice', 'milk'), category (e.g., 'dairy', 'spices'), brand name (e.g., 'SpiceWorks'), or tag (e.g., 'staples', 'healthy'). Search is case-insensitive and matches across product title, description text, and metadata tags."
-            }
+            q: { type: "string", description: "Query text (e.g., 'milk salt spices')" },
+            category: { type: "string", description: "Category substring (e.g., 'Dairy' or 'Grocery > Spices')" },
+            priceMin: { type: "number", description: "Minimum price in INR" },
+            priceMax: { type: "number", description: "Maximum price in INR" },
+            inStock: { type: "boolean", description: "Only in-stock items if true" }
+          },
+          additionalProperties: false
+        },
+        outputSchema: {
+          type: "object",
+          properties: {
+            results: { type: "array", items: { type: "object" } }
+          },
+          required: ["results"],
+          additionalProperties: false
+        }
+      },
+      {
+        name: "search",
+        title: "Search items",
+        description: "Search items by keywords (token OR match).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Free-text search, e.g., 'buy curd milk salt'." }
           },
           required: ["query"],
           additionalProperties: false
         }
       },
       {
-        name: "get_product_details",
-        title: "Get Product Details",
-        description: "Retrieve complete information about a specific grocery product by its ID. Returns comprehensive product data including: product ID, title, full description text, product URL, and detailed metadata (brand, category, SKU, unit size, pricing in INR with MRP and discount percentage, stock availability, and tags). Use this after getting product IDs from the search_products tool to access detailed information including current price, discounts, and specifications. Product IDs follow the format 'prod-1' through 'prod-20'.",
+        name: "fetch",
+        title: "Fetch item details",
+        description: "Fetch full details of a product by ID.",
         inputSchema: {
           type: "object",
           properties: {
-            id: {
-              type: "string",
-              description: "Product ID to fetch (e.g., 'prod-1', 'prod-2', etc.). Must be a valid product ID from the catalog. Product IDs range from 'prod-1' to 'prod-20'. Use the search_products tool first to discover valid product IDs."
-            }
+            id: { type: "string", description: "Product ID (e.g., prod-7)" }
           },
           required: ["id"],
           additionalProperties: false
-        },
-        outputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string", description: "Unique product identifier" },
-            title: { type: "string", description: "Product name and packaging size" },
-            text: { type: "string", description: "Detailed product description including key features, price, and category" },
-            url: { type: "string", description: "Product page URL" },
-            metadata: {
-              type: "object",
-              description: "Structured product metadata including brand, category, SKU, unitSize, priceInINR, mrpInINR, discountPercent, inStock (boolean), and tags (array of strings)"
-            }
-          },
-          required: ["id","title","text"],
-          additionalProperties: true
         }
       },
       {
-        name: "add_to_cart",
-        title: "Add Product to Cart",
-        description: "Add a grocery product to the shopping cart with specified quantity. Validates product availability and stock status. If the product is already in cart, this will ADD to the existing quantity (not replace). Returns confirmation message with updated cart summary including all items, quantities, and total amount. Use this after finding a product via search_products to add it to your cart.",
+        name: "cart/add",
+        title: "Add to cart",
+        description: "Add an item to the session cart.",
         inputSchema: {
           type: "object",
           properties: {
-            productId: {
-              type: "string",
-              description: "Product ID to add to cart (e.g., 'prod-1', 'prod-2'). Use search_products to discover product IDs. The product must exist and be in stock."
-            },
-            quantity: {
-              type: "integer",
-              description: "Quantity to add to cart. Must be a positive integer. Defaults to 1 if not specified. This quantity will be added to any existing quantity in the cart.",
-              default: 1,
-              minimum: 1
-            }
+            id: { type: "string", description: "Product ID" },
+            qty: { type: "integer", minimum: 1, default: 1 }
           },
-          required: ["productId"],
+          required: ["id"],
           additionalProperties: false
         }
       },
       {
-        name: "remove_from_cart",
-        title: "Remove Product from Cart",
-        description: "Remove a product completely from the shopping cart. This removes the entire product entry regardless of quantity. Returns confirmation message with updated cart summary. If you want to reduce quantity instead of removing completely, use remove_from_cart and then add_to_cart with the desired quantity.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            productId: {
-              type: "string",
-              description: "Product ID to remove from cart (e.g., 'prod-1'). The product must exist in the cart."
-            }
-          },
-          required: ["productId"],
-          additionalProperties: false
-        }
+        name: "cart/get",
+        title: "Get cart",
+        description: "Get the current session cart summary.",
+        inputSchema: { type: "object", additionalProperties: false }
       },
       {
-        name: "get_cart",
-        title: "View Shopping Cart",
-        description: "View the current shopping cart contents with full details. Returns all cart items with product information (title, quantity, unit price, unit MRP, line total, line savings), and a summary with subtotal, total MRP, total savings, final amount to pay, and item count. Use this to check what's in the cart before checkout or to show the user their current cart.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          additionalProperties: false
-        }
+        name: "cart/clear",
+        title: "Clear cart",
+        description: "Remove all items from the cart.",
+        inputSchema: { type: "object", additionalProperties: false }
       },
       {
-        name: "clear_cart",
-        title: "Clear Shopping Cart",
-        description: "Empty the entire shopping cart, removing all items. This action removes all products from the cart regardless of quantity. Returns confirmation message with the number of items removed. Use this when the user wants to start over or cancel their shopping session.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          additionalProperties: false
-        }
-      },
-      {
-        name: "checkout",
-        title: "Checkout and Place Order",
-        description: "Process checkout and create a completed order from the current cart contents. Validates that cart is not empty. Returns order confirmation with unique order ID, itemized list of purchased products with quantities and prices, and order summary with total amount. The cart will be automatically cleared after successful checkout. Order status will be 'completed' and can be retrieved later using get_order_summary with the order ID.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          additionalProperties: false
-        }
-      },
-      {
-        name: "get_order_summary",
-        title: "Get Order Summary",
-        description: "Retrieve the details of a previously completed order by its order ID. Returns complete order information including order ID, all items purchased with quantities and prices, order summary with totals, order date/time, and order status. Use this to view past orders or to show order confirmation details after checkout. The order ID is provided when you complete checkout.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            orderId: {
-              type: "string",
-              description: "Order ID to retrieve (e.g., 'order-1730028000-abc123def'). This ID is returned when you complete a checkout."
-            }
-          },
-          required: ["orderId"],
-          additionalProperties: false
-        }
+        name: "checkout/create_order",
+        title: "Create order (mock)",
+        description: "Create a mock order from the cart and compute totals.",
+        inputSchema: { type: "object", additionalProperties: false }
       }
     ]
   };
 }
 
-function handleToolsCall(params) {
-  const { name, arguments: args } = params || {};
-  if (name === 'search_products') {
-    const q = (args?.query || '').toLowerCase();
-    const results = products
-      .filter(d =>
-        d.title.toLowerCase().includes(q) ||
-        d.text.toLowerCase().includes(q) ||
-        d.metadata.tags.some(t => t.toLowerCase().includes(q))
-      )
-      .map(d => ({ id: d.id, title: d.title, url: d.url }));
+/** -------- Tool implementations -------- */
+function tool_inventory_list(args) {
+  const list = filterCatalog({
+    q: args?.q,
+    category: args?.category,
+    priceMin: (typeof args?.priceMin === 'number') ? args.priceMin : undefined,
+    priceMax: (typeof args?.priceMax === 'number') ? args.priceMax : undefined,
+    inStock: (typeof args?.inStock === 'boolean') ? args.inStock : undefined
+  }).map(summarize);
 
-    return { content: [{ type: 'text', text: JSON.stringify({ results }) }] };
-  }
-
-  if (name === 'get_product_details') {
-    const id = args?.id;
-    const product = products.find(d => d.id === id);
-    if (!product) {
-      throw { code: -32004, message: `Product with id ${id} not found` };
-    }
-    return { content: [{ type: 'text', text: JSON.stringify(product) }] };
-  }
-
-  if (name === 'add_to_cart') {
-    return handleAddToCart(args?.productId, args?.quantity || 1);
-  }
-
-  if (name === 'remove_from_cart') {
-    return handleRemoveFromCart(args?.productId);
-  }
-
-  if (name === 'get_cart') {
-    return handleGetCart();
-  }
-
-  if (name === 'clear_cart') {
-    return handleClearCart();
-  }
-
-  if (name === 'checkout') {
-    return handleCheckout();
-  }
-
-  if (name === 'get_order_summary') {
-    return handleGetOrderSummary(args?.orderId);
-  }
-
-  throw { code: -32601, message: `Unknown tool: ${name}` };
+  return { content: [{ type: 'text', text: JSON.stringify({ results: list }) }] };
 }
 
-/** -------- Streamable HTTP (modern) at /mcp --------
- * POST /mcp -> JSON-RPC 2.0 single-response JSON (no streaming needed)
- * GET  /mcp -> optional SSE for server->client notifications
- */
+function tool_search(args) {
+  const q = args?.query || '';
+  const list = filterCatalog({ q }).map(summarize);
+  return { content: [{ type: 'text', text: JSON.stringify({ results: list }) }] };
+}
+
+function tool_fetch(args) {
+  const id = args?.id;
+  const doc = catalog.find(d => d.id === id);
+  if (!doc) throw { code: -32004, message: `Product with id ${id} not found` };
+  return { content: [{ type: 'text', text: JSON.stringify(doc) }] };
+}
+
+function tool_cart_add(args, sid) {
+  const id = args?.id;
+  const qty = Math.max(1, parseInt(args?.qty || 1, 10));
+  const doc = catalog.find(d => d.id === id);
+  if (!doc) throw { code: -32004, message: `Product with id ${id} not found` };
+  const cart = ensureCart(sid);
+  const prev = cart.get(id) || 0;
+  cart.set(id, prev + qty);
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', added: { id, qty }, cartSize: cart.size }) }] };
+}
+
+function tool_cart_get(_args, sid) {
+  const cart = ensureCart(sid);
+  const items = [];
+  let subtotal = 0;
+  for (const [id, qty] of cart.entries()) {
+    const d = catalog.find(x => x.id === id);
+    if (!d) continue;
+    const price = d.metadata?.priceInINR || 0;
+    const line = { id, title: d.title, qty, unitPriceInINR: price, totalInINR: price * qty };
+    subtotal += line.totalInINR;
+    items.push(line);
+  }
+  return { content: [{ type: 'text', text: JSON.stringify({ items, subtotalInINR: subtotal }) }] };
+}
+
+function tool_cart_clear(_args, sid) {
+  carts.set(sid, new Map());
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', cleared: true }) }] };
+}
+
+function tool_checkout_create_order(_args, sid) {
+  const cart = ensureCart(sid);
+  if (cart.size === 0) throw { code: -32010, message: 'Cart is empty' };
+
+  const orderId = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const items = [];
+  let subtotal = 0;
+
+  for (const [id, qty] of cart.entries()) {
+    const d = catalog.find(x => x.id === id);
+    if (!d) continue;
+    const price = d.metadata?.priceInINR || 0;
+    const total = price * qty;
+    subtotal += total;
+    items.push({ id, title: d.title, qty, unitPriceInINR: price, lineTotalInINR: total });
+  }
+
+  const shippingInINR = subtotal >= 499 ? 0 : 30;
+  const totalInINR = subtotal + shippingInINR;
+
+  // clear cart after order creation (mock)
+  carts.set(sid, new Map());
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        orderId,
+        items,
+        subtotalInINR: subtotal,
+        shippingInINR,
+        totalInINR,
+        status: 'CONFIRMED (MOCK)'
+      })
+    }]
+  };
+}
+
+/** -------- Dispatcher -------- */
+function handleToolsCall(methodName, params, sid) {
+  const { name, arguments: args } = params || {};
+  switch (name) {
+    case 'inventory/list': return tool_inventory_list(args);
+    case 'search': return tool_search(args);
+    case 'fetch': return tool_fetch(args);
+    case 'cart/add': return tool_cart_add(args, sid);
+    case 'cart/get': return tool_cart_get(args, sid);
+    case 'cart/clear': return tool_cart_clear(args, sid);
+    case 'checkout/create_order': return tool_checkout_create_order(args, sid);
+    default: throw { code: -32601, message: `Unknown tool: ${name}` };
+  }
+}
+
+/** -------- Streamable HTTP (modern) at /mcp -------- */
 app.post('/mcp', (req, res) => {
   // Advertise/echo protocol version header (optional but nice)
   res.setHeader('MCP-Protocol-Version', '2025-06-18');
@@ -855,23 +629,19 @@ app.post('/mcp', (req, res) => {
 
   try {
     if (method === 'initialize') {
-      // negotiate protocolVersion if client supplied one
       const requestedVersion = params?.protocolVersion || '2025-06-18';
       const supported = new Set(['2025-06-18', '2025-03-26', '2024-11-05']);
       const protocolVersion = supported.has(requestedVersion) ? requestedVersion : '2025-06-18';
 
+      const sid = newSessionId();
+      sessions.set(sid, { createdAt: Date.now() });
+      res.setHeader('Mcp-Session-Id', sid);
+
       return res.json(jsonrpcOk(id, {
         protocolVersion,
-        capabilities: {
-          // Required shape: tools.listChanged boolean
-          tools: { listChanged: false }
-        },
-        serverInfo: {
-          name: 'AgenticPay MCP',
-          title: 'Quick Commerce Demo Server',
-          version: '1.0.0'
-        },
-        instructions: 'Use tools/list to see available shopping tools: search_products, add_to_cart, checkout, etc.'
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server', version: '1.0.0' },
+        instructions: 'Use inventory/list, search, fetch, cart/*, and checkout/create_order.'
       }));
     }
 
@@ -880,7 +650,8 @@ app.post('/mcp', (req, res) => {
     }
 
     if (method === 'tools/call') {
-      const result = handleToolsCall(params);
+      const sid = getSidFromHeaders(req) || 'anonymous';
+      const result = handleToolsCall(method, params, sid);
       return res.json(jsonrpcOk(id, result));
     }
 
@@ -895,7 +666,7 @@ app.post('/mcp', (req, res) => {
   }
 });
 
-// Optional: GET /mcp SSE stream for unsolicited notifications
+// Optional: GET /mcp SSE (unsolicited notifications)
 app.get('/mcp', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -906,12 +677,7 @@ app.get('/mcp', (req, res) => {
   });
   res.flushHeaders?.();
 
-  // Example: notify capabilities on connect (JSON-RPC as "message" event)
-  const note = {
-    jsonrpc: '2.0',
-    method: 'notifications/capabilities',
-    params: toolsDefinition()
-  };
+  const note = { jsonrpc: '2.0', method: 'notifications/capabilities', params: toolsDefinition() };
   res.write(`event: message\n`);
   res.write(`data: ${JSON.stringify(note)}\n\n`);
 
@@ -919,10 +685,7 @@ app.get('/mcp', (req, res) => {
   req.on('close', () => clearInterval(keepalive));
 });
 
-/** -------- Legacy HTTP+SSE shim at /sse --------
- * GET /sse  -> first send: event:endpoint with POST URL
- * POST /sse -> accept JSON-RPC and return JSON (not SSE)
- */
+/** -------- Legacy HTTP+SSE shim at /sse -------- */
 app.get('/sse', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -934,17 +697,10 @@ app.get('/sse', (req, res) => {
   res.flushHeaders?.();
 
   const postUrl = `${req.protocol}://${req.get('host')}/sse`;
-
-  // REQUIRED by legacy: tell client where to POST JSON-RPC
   res.write(`event: endpoint\n`);
   res.write(`data: ${JSON.stringify({ url: postUrl })}\n\n`);
 
-  // Optional immediate capabilities notification (JSON-RPC in "message")
-  const capabilitiesMsg = {
-    jsonrpc: '2.0',
-    method: 'notifications/capabilities',
-    params: toolsDefinition()
-  };
+  const capabilitiesMsg = { jsonrpc: '2.0', method: 'notifications/capabilities', params: toolsDefinition() };
   res.write(`event: message\n`);
   res.write(`data: ${JSON.stringify(capabilitiesMsg)}\n\n`);
 
@@ -962,19 +718,16 @@ app.post('/sse', (req, res) => {
       return res.json(jsonrpcOk(id, {
         protocolVersion: '2024-11-05',
         capabilities: { tools: { listChanged: false } },
-        serverInfo: {
-          name: 'AgenticPay MCP',
-          title: 'Quick Commerce Demo Server (Legacy)',
-          version: '1.0.0'
-        },
-        instructions: 'Use tools/list to see available shopping tools.'
+        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server (Legacy)', version: '1.0.0' },
+        instructions: 'Use inventory/list, search, fetch, cart/*, and checkout/create_order.'
       }));
     }
     if (method === 'tools/list') {
       return res.json(jsonrpcOk(id, toolsDefinition()));
     }
     if (method === 'tools/call') {
-      const result = handleToolsCall(params);
+      const sid = getSidFromHeaders(req) || 'legacy';
+      const result = handleToolsCall(method, params, sid);
       return res.json(jsonrpcOk(id, result));
     }
     return res.json(jsonrpcErr(id, -32601, `Unknown method: ${method}`));
@@ -992,12 +745,11 @@ app.options('*', (req, res) => {
   res.sendStatus(200);
 });
 
-/** -------- Start server -------- */
-const PORT = process.env.PORT || 3001;
+/** -------- Start -------- */
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`MCP Server running on port ${PORT}`);
   console.log(`Health:        http://localhost:${PORT}/health`);
-  console.log(`Capabilities:  http://localhost:${PORT}/capabilities`);
   console.log(`Modern MCP:    http://localhost:${PORT}/mcp (POST/GET)`);
   console.log(`Legacy SSE:    http://localhost:${PORT}/sse (GET + POST)`);
 });
