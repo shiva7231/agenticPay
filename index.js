@@ -435,10 +435,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-/** -------- MCP tools definition -------- */
+/** -------- MCP tools definition (canonical + aliases) -------- */
 function toolsDefinition() {
   return {
     tools: [
+      // Canonical
       {
         name: "inventory_list",
         title: "List inventory",
@@ -446,8 +447,8 @@ function toolsDefinition() {
         inputSchema: {
           type: "object",
           properties: {
-            q: { type: "string", description: "Free-text query e.g. 'milk salt spices'" },
-            category: { type: "string", description: "Substring e.g. 'Dairy' or 'Grocery > Spices'" },
+            q: { type: "string", description: "Free-text query (e.g., 'milk salt spices')" },
+            category: { type: "string", description: "Substring (e.g., 'Dairy' or 'Grocery > Spices')" },
             priceMin: { type: "number", description: "Minimum price in INR" },
             priceMax: { type: "number", description: "Maximum price in INR" },
             inStock: { type: "boolean", description: "Only in-stock items if true" }
@@ -461,19 +462,52 @@ function toolsDefinition() {
           additionalProperties: false
         }
       },
+      // Alias
       {
-        name: "product_search",
-        title: "Search items",
-        description: "Keyword search (token OR match). Detects numbers as price ceilings. Examples: 'buy curd milk', 'under 100', 'spices below 90'.",
+        name: "inventory/list",
+        title: "List inventory (alias)",
+        description: "Alias of inventory_list.",
         inputSchema: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Free-text, e.g. 'milk under 100'." }
+            q: { type: "string" },
+            category: { type: "string" },
+            priceMin: { type: "number" },
+            priceMax: { type: "number" },
+            inStock: { type: "boolean" }
+          },
+          additionalProperties: false
+        }
+      },
+
+      // Canonical
+      {
+        name: "product_search",
+        title: "Search items",
+        description: "Keyword search (token OR match). Detects numbers as price ceilings. Examples: 'under 100', 'buy curd milk salt'.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Free-text (e.g., 'milk under 100')" }
           },
           required: ["query"],
           additionalProperties: false
         }
       },
+      // Alias
+      {
+        name: "search",
+        title: "Search items (alias)",
+        description: "Alias of product_search.",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false
+        }
+      },
+
+      // Canonical
       {
         name: "product_fetch",
         title: "Fetch item details",
@@ -485,50 +519,40 @@ function toolsDefinition() {
           additionalProperties: false
         }
       },
+      // Alias
       {
-        name: "cart_add",
-        title: "Add to cart",
-        description: "Add an item to the cart. Use id or a name. Examples: 'add prod-7 qty 2', 'add milk', 'add toned milk 1l qty 3'.",
+        name: "fetch",
+        title: "Fetch item details (alias)",
+        description: "Alias of product_fetch.",
         inputSchema: {
           type: "object",
-          properties: {
-            id:  { type: "string", description: "Product ID (preferred)" },
-            name:{ type: "string", description: "Fallback name/keywords if ID not provided" },
-            qty: { type: "integer", minimum: 1, default: 1 }
-          },
+          properties: { id: { type: "string" } },
+          required: ["id"],
           additionalProperties: false
         }
       },
-      {
-        name: "cart_get",
-        title: "Get cart",
-        description: "Show current cart summary with totals.",
-        inputSchema: { type: "object", additionalProperties: false }
-      },
-      {
-        name: "cart_clear",
-        title: "Clear cart",
-        description: "Remove all items from the cart.",
-        inputSchema: { type: "object", additionalProperties: false }
-      },
-      {
-        name: "checkout_create_order",
-        title: "Create order (mock)",
-        description: "Create a mock order from the cart (say 'proceed to checkout', 'place order').",
-        inputSchema: { type: "object", additionalProperties: false }
-      },
-      {
-        name: "checkout_pay",
-        title: "Pay for order (mock)",
-        description: "Complete payment for the most recent order (say 'proceed to pay', 'pay now').",
-        inputSchema: {
-          type: "object",
-          properties: {
-            orderId: { type: "string", description: "Optional; if absent, uses last order in session" }
-          },
-          additionalProperties: false
-        }
-      }
+
+      // Canonical cart/checkout
+      { name: "cart_add",   title: "Add to cart",   description: "Add by id or name. Examples: 'add prod-7 qty 2', 'add milk'.",
+        inputSchema: { type: "object", properties: {
+          id: { type: "string" }, name: { type: "string" }, qty: { type: "integer", minimum: 1, default: 1 }
+        }, additionalProperties: false } },
+      { name: "cart_get",   title: "Get cart",      description: "Show cart summary with totals.", inputSchema: { type: "object", additionalProperties: false } },
+      { name: "cart_clear", title: "Clear cart",    description: "Remove all items from the cart.", inputSchema: { type: "object", additionalProperties: false } },
+      { name: "checkout_create_order", title: "Create order (mock)", description: "Create a mock order from the cart.", inputSchema: { type: "object", additionalProperties: false } },
+      { name: "checkout_pay",          title: "Pay for order (mock)", description: "Complete payment for the most recent order.",
+        inputSchema: { type: "object", properties: { orderId: { type: "string" } }, additionalProperties: false } },
+
+      // Aliases for old slash names (optional but safe)
+      { name: "cart/add",               title: "Add to cart (alias)",              description: "Alias of cart_add.",
+        inputSchema: { type: "object", properties: {
+          id: { type: "string" }, name: { type: "string" }, qty: { type: "integer", minimum: 1, default: 1 }
+        }, additionalProperties: false } },
+      { name: "cart/get",               title: "Get cart (alias)",                 description: "Alias of cart_get.",               inputSchema: { type: "object", additionalProperties: false } },
+      { name: "cart/clear",             title: "Clear cart (alias)",               description: "Alias of cart_clear.",             inputSchema: { type: "object", additionalProperties: false } },
+      { name: "checkout/create_order",  title: "Create order (alias)",             description: "Alias of checkout_create_order.",  inputSchema: { type: "object", additionalProperties: false } },
+      { name: "checkout/pay",           title: "Pay for order (alias)",            description: "Alias of checkout_pay.",
+        inputSchema: { type: "object", properties: { orderId: { type: "string" } }, additionalProperties: false } }
     ]
   };
 }
@@ -670,10 +694,11 @@ function tool_checkout_pay(args, sid) {
   };
 }
 
-/** -------- Dispatcher -------- */
+/** -------- Dispatcher (canonical + alias names) -------- */
 function handleToolsCall(_methodName, params, sid) {
   const { name, arguments: args } = params || {};
   switch (name) {
+    // Canonical
     case 'inventory_list':         return tool_inventory_list(args);
     case 'product_search':         return tool_product_search(args);
     case 'product_fetch':          return tool_product_fetch(args);
@@ -682,7 +707,19 @@ function handleToolsCall(_methodName, params, sid) {
     case 'cart_clear':             return tool_cart_clear(args, sid);
     case 'checkout_create_order':  return tool_checkout_create_order(args, sid);
     case 'checkout_pay':           return tool_checkout_pay(args, sid);
-    default: throw { code: -32601, message: `Unknown tool: ${name}` };
+
+    // Aliases (backward compat)
+    case 'inventory/list':         return tool_inventory_list(args);
+    case 'search':                 return tool_product_search(args);
+    case 'fetch':                  return tool_product_fetch(args);
+    case 'cart/add':               return tool_cart_add(args, sid);
+    case 'cart/get':               return tool_cart_get(args, sid);
+    case 'cart/clear':             return tool_cart_clear(args, sid);
+    case 'checkout/create_order':  return tool_checkout_create_order(args, sid);
+    case 'checkout/pay':           return tool_checkout_pay(args, sid);
+
+    default:
+      throw { code: -32601, message: `Unknown tool: ${name}` };
   }
 }
 
@@ -707,9 +744,9 @@ app.post('/mcp', (req, res) => {
 
       return res.json(jsonrpcOk(id, {
         protocolVersion,
-        capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server', version: '1.0.0' },
-        instructions: 'Use inventory_list, product_search, product_fetch, cart_* and checkout_* tools.'
+        capabilities: { tools: { listChanged: true } }, // force rebuild of actions
+        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server', version: '1.0.2' },
+        instructions: 'Use inventory_list / product_search / product_fetch, cart_* and checkout_* tools.'
       }));
     }
 
@@ -785,9 +822,9 @@ app.post('/sse', (req, res) => {
     if (method === 'initialize') {
       return res.json(jsonrpcOk(id, {
         protocolVersion: '2024-11-05',
-        capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server (Legacy)', version: '1.0.0' },
-        instructions: 'Use inventory_list, product_search, product_fetch, cart_* and checkout_* tools.'
+        capabilities: { tools: { listChanged: true } },
+        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server (Legacy)', version: '1.0.2' },
+        instructions: 'Use inventory_list / product_search / product_fetch, cart_* and checkout_* tools.'
       }));
     }
     if (method === 'tools/list') {
