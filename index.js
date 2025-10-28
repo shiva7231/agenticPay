@@ -522,9 +522,22 @@ function tool_inventory_list(args) {
 
 function tool_search(args) {
   const q = args?.query || '';
-  const list = filterCatalog({ q }).map(summarize);
-  return { content: [{ type: 'text', text: JSON.stringify({ results: list }) }] };
+
+  // --- NEW: detect numeric value for price filtering ---
+  let priceMax;
+  const numericMatch = q.match(/\d+/); // find first number in query
+  if (numericMatch) {
+    priceMax = parseInt(numericMatch[0], 10);
+  }
+
+  // --- pass both q and optional priceMax to filterCatalog ---
+  const list = filterCatalog({ q, priceMax }).map(summarize);
+
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ results: list }) }]
+  };
 }
+
 
 function tool_fetch(args) {
   const id = args?.id;
