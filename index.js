@@ -523,20 +523,24 @@ function tool_inventory_list(args) {
 function tool_search(args) {
   const q = args?.query || '';
 
-  // --- NEW: detect numeric value for price filtering ---
+  // --- detect numeric value for price filtering ---
   let priceMax;
-  const numericMatch = q.match(/\d+/); // find first number in query
+  const numericMatch = q.match(/\d+/); // e.g. "under rupees 100" -> 100
   if (numericMatch) {
     priceMax = parseInt(numericMatch[0], 10);
   }
 
-  // --- pass both q and optional priceMax to filterCatalog ---
-  const list = filterCatalog({ q, priceMax }).map(summarize);
+  // IMPORTANT: agar priceMax mila hai to token-based text filter ko hata do
+  // taaki "under 100" jaisi queries tokens ("under","rupees") ki wajah se fail na hon.
+  const qForFilter = (typeof priceMax === 'number') ? '' : q;
+
+  const list = filterCatalog({ q: qForFilter, priceMax }).map(summarize);
 
   return {
     content: [{ type: 'text', text: JSON.stringify({ results: list }) }]
   };
 }
+
 
 
 function tool_fetch(args) {
