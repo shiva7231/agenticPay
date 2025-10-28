@@ -18,7 +18,13 @@ app.use(cors({
   ]
 }));
 
-/** -------- Minimal catalog (add more later) -------- */
+// --- Merchant static info (used in PBL + summaries) ---
+const MERCHANT = {
+  name: 'Abhishek Srivastava',
+  supportEmail: 'srivastava.abhishek@pinelabs.com'
+};
+
+/** -------- Catalog (YOUR SAME LIST KEPT) -------- */
 const catalog = [
   {
     id: "prod-1",
@@ -367,9 +373,18 @@ const jsonrpcOk   = (id, result) => ({ jsonrpc: '2.0', id, result });
 const jsonrpcErr  = (id, code, message, data) => ({ jsonrpc: '2.0', id, error: { code, message, data } });
 const newSessionId = () => crypto.randomUUID();
 
-const sessions   = new Map();            // sid -> { createdAt }
-const carts      = new Map();            // sid -> Map<productId, qty>
-const lastOrders = new Map();            // sid -> { orderId, totalInINR, items }
+const sessions    = new Map(); // sid -> { createdAt }
+const carts       = new Map(); // sid -> Map<productId, qty>
+const lastOrders  = new Map(); // sid -> { orderId, totalInINR, items, paymentMethod }
+const profiles    = new Map(); // sid -> { email }
+const addrBooks   = new Map(); // sid -> [ { label, line1, line2, city, state, pincode } ]
+const addrSelected= new Map(); // sid -> number (index)
+const paymentPref = new Map(); // sid -> 'ONLINE' | 'COD'
+const coupons     = new Map(); // sid -> { code, discountInINR, percent, freeship }
+
+/** CHARGES & RULES */
+const SHIPPING_RULE = { threshold: 499, shippingBelow: 30, shippingAtOrAbove: 0 };
+const COD_CHARGE = 60; // add when payment method is COD
 
 function getSidFromHeaders(req) {
   return req.header('Mcp-Session-Id') || req.header('MCP-SESSION-ID') || 'anonymous';
@@ -377,6 +392,10 @@ function getSidFromHeaders(req) {
 function ensureCart(sid) {
   if (!carts.has(sid)) carts.set(sid, new Map());
   return carts.get(sid);
+}
+function ensureAddrBook(sid) {
+  if (!addrBooks.has(sid)) addrBooks.set(sid, []);
+  return addrBooks.get(sid);
 }
 function tokenize(q) {
   return (q || '')
@@ -439,7 +458,7 @@ app.get('/health', (req, res) => {
 function toolsDefinition() {
   return {
     tools: [
-      // Canonical
+      // ===== Inventory & Search =====
       {
         name: "inventory_list",
         title: "List inventory",
@@ -462,8 +481,7 @@ function toolsDefinition() {
           additionalProperties: false
         }
       },
-      // Alias
-      {
+      { // alias
         name: "inventory/list",
         title: "List inventory (alias)",
         description: "Alias of inventory_list.",
@@ -479,8 +497,6 @@ function toolsDefinition() {
           additionalProperties: false
         }
       },
-
-      // Canonical
       {
         name: "product_search",
         title: "Search items",
@@ -494,8 +510,7 @@ function toolsDefinition() {
           additionalProperties: false
         }
       },
-      // Alias
-      {
+      { // alias
         name: "search",
         title: "Search items (alias)",
         description: "Alias of product_search.",
@@ -506,8 +521,6 @@ function toolsDefinition() {
           additionalProperties: false
         }
       },
-
-      // Canonical
       {
         name: "product_fetch",
         title: "Fetch item details",
@@ -519,8 +532,7 @@ function toolsDefinition() {
           additionalProperties: false
         }
       },
-      // Alias
-      {
+      { // alias
         name: "fetch",
         title: "Fetch item details (alias)",
         description: "Alias of product_fetch.",
@@ -532,32 +544,132 @@ function toolsDefinition() {
         }
       },
 
-      // Canonical cart/checkout
-      { name: "cart_add",   title: "Add to cart",   description: "Add by id or name. Examples: 'add prod-7 qty 2', 'add milk'.",
+      // ===== Cart & Checkout (existing) =====
+      { name: "cart_add", title: "Add to cart", description: "Add by id or name. Examples: 'add prod-7 qty 2', 'add milk'.",
         inputSchema: { type: "object", properties: {
           id: { type: "string" }, name: { type: "string" }, qty: { type: "integer", minimum: 1, default: 1 }
         }, additionalProperties: false } },
-      { name: "cart_get",   title: "Get cart",      description: "Show cart summary with totals.", inputSchema: { type: "object", additionalProperties: false } },
-      { name: "cart_clear", title: "Clear cart",    description: "Remove all items from the cart.", inputSchema: { type: "object", additionalProperties: false } },
-      { name: "checkout_create_order", title: "Create order (mock)", description: "Create a mock order from the cart.", inputSchema: { type: "object", additionalProperties: false } },
-      { name: "checkout_pay",          title: "Pay for order (mock)", description: "Complete payment for the most recent order.",
-        inputSchema: { type: "object", properties: { orderId: { type: "string" } }, additionalProperties: false } },
+      { name: "cart_get",   title: "Get cart",   description: "Show cart summary with totals.", inputSchema: { type: "object", additionalProperties: false } },
+      { name: "cart_clear", title: "Clear cart", description: "Remove all items from the cart.", inputSchema: { type: "object", additionalProperties: false } },
 
-      // Aliases for old slash names (optional but safe)
-      { name: "cart/add",               title: "Add to cart (alias)",              description: "Alias of cart_add.",
-        inputSchema: { type: "object", properties: {
-          id: { type: "string" }, name: { type: "string" }, qty: { type: "integer", minimum: 1, default: 1 }
-        }, additionalProperties: false } },
-      { name: "cart/get",               title: "Get cart (alias)",                 description: "Alias of cart_get.",               inputSchema: { type: "object", additionalProperties: false } },
-      { name: "cart/clear",             title: "Clear cart (alias)",               description: "Alias of cart_clear.",             inputSchema: { type: "object", additionalProperties: false } },
-      { name: "checkout/create_order",  title: "Create order (alias)",             description: "Alias of checkout_create_order.",  inputSchema: { type: "object", additionalProperties: false } },
-      { name: "checkout/pay",           title: "Pay for order (alias)",            description: "Alias of checkout_pay.",
-        inputSchema: { type: "object", properties: { orderId: { type: "string" } }, additionalProperties: false } }
+      // ===== NEW: Agentic checkout helpers =====
+      {
+        name: "payment_choose",
+        title: "Choose payment method",
+        description: "Select payment method: ONLINE or COD (COD adds ₹60 delivery charge). Example: {\"method\":\"COD\"}.",
+        inputSchema: {
+          type: "object",
+          properties: { method: { type: "string", enum: ["ONLINE", "COD"] } },
+          required: ["method"],
+          additionalProperties: false
+        }
+      },
+      {
+        name: "profile_set_email",
+        title: "Set buyer email",
+        description: "Save buyer's email for sending Pay-by-Link. Example: {\"email\":\"user@example.com\"}.",
+        inputSchema: {
+          type: "object",
+          properties: { email: { type: "string" } },
+          required: ["email"],
+          additionalProperties: false
+        }
+      },
+      {
+        name: "address_add",
+        title: "Add delivery address",
+        description: "Add a delivery address. Example uses: label, line1, line2, city, state, pincode.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            label: { type: "string" },
+            line1: { type: "string" },
+            line2: { type: "string" },
+            city:  { type: "string" },
+            state: { type: "string" },
+            pincode: { type: "string" }
+          },
+          required: ["line1","city","state","pincode"],
+          additionalProperties: false
+        }
+      },
+      {
+        name: "address_list",
+        title: "List addresses",
+        description: "List saved delivery addresses for selection.",
+        inputSchema: { type: "object", additionalProperties: false }
+      },
+      {
+        name: "address_select",
+        title: "Select address",
+        description: "Select one address by its index returned from address_list. Example: {\"index\":0}.",
+        inputSchema: {
+          type: "object",
+          properties: { index: { type: "integer", minimum: 0 } },
+          required: ["index"],
+          additionalProperties: false
+        }
+      },
+      {
+        name: "coupon_apply",
+        title: "Apply coupon",
+        description: "Apply a coupon code. Examples: SAVE50 (₹50 off), SAVE10 (10% up to ₹100), FREESHIP (shipping free), FIRSTBUY (₹75 off on ≥₹300).",
+        inputSchema: {
+          type: "object",
+          properties: { code: { type: "string" } },
+          required: ["code"],
+          additionalProperties: false
+        }
+      },
+      {
+        name: "checkout_summary",
+        title: "Checkout summary",
+        description: "Show breakdown: items, subtotal, shipping, COD charge (if any), coupon discount, grand total, selected address & payment method.",
+        inputSchema: { type: "object", additionalProperties: false }
+      },
+
+      // ===== Create order & Pay =====
+      { name: "checkout_create_order", title: "Create order (mock)", description: "Create a mock order from the cart. Requires selected address. COD adds ₹60.", inputSchema: { type: "object", additionalProperties: false } },
+      {
+        name: "payment_create_link",
+        title: "Create Pay-by-Link (mock)",
+        description: "Generate a mock payment link using buyer email and payable amount. Use after create_order (ONLINE only).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            amountInINR: { type: "number", description: "Override amount; otherwise uses last order total" },
+            email: { type: "string", description: "Override email; otherwise uses saved profile email" }
+          },
+          additionalProperties: false
+        }
+      },
+      { name: "checkout_pay", title: "Pay for order (mock)", description: "Complete payment for the most recent order (ONLINE). For COD, payment remains pending.", inputSchema: {
+        type: "object",
+        properties: { orderId: { type: "string" } },
+        additionalProperties: false
+      }},
+
+      // Aliases for older names (kept)
+      { name: "cart/add",               title: "Add to cart (alias)", description: "Alias of cart_add.", inputSchema: { type: "object", properties: { id: {type:"string"}, name:{type:"string"}, qty:{type:"integer", minimum:1, default:1} }, additionalProperties:false } },
+      { name: "cart/get",               title: "Get cart (alias)",    description: "Alias of cart_get.",  inputSchema: { type: "object", additionalProperties: false } },
+      { name: "cart/clear",             title: "Clear cart (alias)",  description: "Alias of cart_clear.",inputSchema: { type: "object", additionalProperties: false } },
+      { name: "checkout/create_order",  title: "Create order (alias)",description: "Alias of checkout_create_order.", inputSchema: { type: "object", additionalProperties: false } },
+      { name: "checkout/pay",           title: "Pay for order (alias)",description: "Alias of checkout_pay.", inputSchema: { type: "object", properties: { orderId: { type: "string" } }, additionalProperties: false } }
     ]
   };
 }
 
-/** -------- Tool implementations -------- */
+/** -------- Tool implementations (existing) -------- */
+function summarize(doc) {
+  return {
+    id: doc.id,
+    title: doc.title,
+    url: doc.url,
+    priceInINR: doc.metadata?.priceInINR,
+    unitSize: doc.metadata?.unitSize,
+    inStock: doc.metadata?.inStock
+  };
+}
 function tool_inventory_list(args) {
   const list = filterCatalog({
     q: args?.q,
@@ -569,29 +681,21 @@ function tool_inventory_list(args) {
 
   return { content: [{ type: 'text', text: JSON.stringify({ results: list }) }] };
 }
-
 function tool_product_search(args) {
   const q = args?.query || '';
-
-  // numeric price ceiling detection (e.g., "under 100")
   let priceMax;
   const m = q.match(/\d+/);
   if (m) priceMax = parseInt(m[0], 10);
-
-  // if price filter present, don't force token matching
   const qForFilter = (typeof priceMax === 'number') ? '' : q;
-
   const list = filterCatalog({ q: qForFilter, priceMax }).map(summarize);
   return { content: [{ type: 'text', text: JSON.stringify({ results: list }) }] };
 }
-
 function tool_product_fetch(args) {
   const id = args?.id;
   const doc = catalog.find(d => d.id === id);
   if (!doc) throw { code: -32004, message: `Product with id ${id} not found` };
   return { content: [{ type: 'text', text: JSON.stringify(doc) }] };
 }
-
 function tool_cart_add(args, sid) {
   let { id, name } = args || {};
   const qty = Math.max(1, parseInt(args?.qty || 1, 10));
@@ -617,7 +721,6 @@ function tool_cart_add(args, sid) {
 
   return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', added: { id: doc.id, title: doc.title, qty } }) }] };
 }
-
 function tool_cart_get(_args, sid) {
   const cart = ensureCart(sid);
   const items = [];
@@ -632,91 +735,232 @@ function tool_cart_get(_args, sid) {
   }
   return { content: [{ type: 'text', text: JSON.stringify({ items, subtotalInINR: subtotal }) }] };
 }
-
 function tool_cart_clear(_args, sid) {
   carts.set(sid, new Map());
   return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', cleared: true }) }] };
 }
 
-function tool_checkout_create_order(_args, sid) {
+/** -------- NEW: Agentic checkout helpers -------- */
+function tool_payment_choose(args, sid) {
+  const method = args?.method;
+  if (!['ONLINE','COD'].includes(method)) throw { code: -32602, message: 'method must be ONLINE or COD' };
+  paymentPref.set(sid, method);
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', method, note: method === 'COD' ? `COD adds ₹${COD_CHARGE} delivery charge` : 'Online payment via Pay-by-Link' }) }] };
+}
+function tool_profile_set_email(args, sid) {
+  const email = String(args?.email || '').trim();
+  if (!email || !email.includes('@')) throw { code: -32602, message: 'Valid email required' };
+  profiles.set(sid, { ...(profiles.get(sid) || {}), email });
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', email }) }] };
+}
+function tool_address_add(args, sid) {
+  const book = ensureAddrBook(sid);
+  const addr = {
+    label: args?.label || `Address ${book.length + 1}`,
+    line1: args.line1, line2: args.line2 || '',
+    city: args.city, state: args.state, pincode: args.pincode
+  };
+  book.push(addr);
+  if (book.length === 1) addrSelected.set(sid, 0);
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', added: addr, count: book.length }) }] };
+}
+function tool_address_list(_args, sid) {
+  const book = ensureAddrBook(sid);
+  const selected = addrSelected.get(sid);
+  return { content: [{ type: 'text', text: JSON.stringify({ addresses: book, selectedIndex: (typeof selected === 'number') ? selected : null }) }] };
+}
+function tool_address_select(args, sid) {
+  const book = ensureAddrBook(sid);
+  const idx = args?.index;
+  if (typeof idx !== 'number' || idx < 0 || idx >= book.length) throw { code: -32602, message: 'Invalid address index' };
+  addrSelected.set(sid, idx);
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', selectedIndex: idx, selected: book[idx] }) }] };
+}
+function computeCart(sid) {
   const cart = ensureCart(sid);
-  if (cart.size === 0) throw { code: -32010, message: 'Cart is empty' };
-
-  const orderId = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
   const items = [];
   let subtotal = 0;
-
   for (const [id, qty] of cart.entries()) {
     const d = catalog.find(x => x.id === id);
     if (!d) continue;
     const price = d.metadata?.priceInINR || 0;
-    const total = price * qty;
-    subtotal += total;
-    items.push({ id, title: d.title, qty, unitPriceInINR: price, lineTotalInINR: total });
+    const lineTotal = price * qty;
+    items.push({ id, title: d.title, qty, unitPriceInINR: price, lineTotalInINR: lineTotal });
+    subtotal += lineTotal;
+  }
+  return { items, subtotalInINR: subtotal };
+}
+function deriveShipping(subtotal, hasFreeShip) {
+  if (hasFreeShip) return 0;
+  return subtotal >= SHIPPING_RULE.threshold ? SHIPPING_RULE.shippingAtOrAbove : SHIPPING_RULE.shippingBelow;
+}
+function applyCouponRules(code, subtotal) {
+  const up = String(code || '').toUpperCase().trim();
+  if (!up) return null;
+
+  // Dummy rules (edit as needed)
+  if (up === 'SAVE50') return { code: up, discountInINR: 50 };
+  if (up === 'SAVE10') return { code: up, percent: 10, maxDiscount: 100 };
+  if (up === 'FREESHIP') return { code: up, freeship: true };
+  if (up === 'FIRSTBUY') {
+    if (subtotal >= 300) return { code: up, discountInINR: 75 };
+    return { code: up, discountInINR: 0, note: 'Minimum ₹300 cart required' };
+  }
+  // Unknown coupon
+  return { code: up, discountInINR: 0, note: 'Invalid/unknown coupon' };
+}
+function computeDiscount(subtotal, coupon) {
+  if (!coupon) return { discount: 0, freeship: false, note: null };
+  if (coupon.percent) {
+    const raw = Math.floor((subtotal * coupon.percent) / 100);
+    const cap = (typeof coupon.maxDiscount === 'number') ? Math.min(raw, coupon.maxDiscount) : raw;
+    return { discount: cap, freeship: false, note: `Applied ${coupon.percent}% (max ${coupon.maxDiscount || '—'})` };
+  }
+  if (coupon.freeship) {
+    return { discount: 0, freeship: true, note: 'Free shipping applied' };
+  }
+  const flat = Math.max(0, coupon.discountInINR || 0);
+  return { discount: flat, freeship: false, note: flat ? `Flat ₹${flat} off` : (coupon.note || null) };
+}
+function tool_coupon_apply(args, sid) {
+  const { items, subtotalInINR } = computeCart(sid);
+  if (items.length === 0) throw { code: -32010, message: 'Cart is empty' };
+  const coupon = applyCouponRules(args?.code, subtotalInINR);
+  coupons.set(sid, coupon || null);
+  const { discount, freeship, note } = computeDiscount(subtotalInINR, coupon);
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', coupon, computed: { discountInINR: discount, freeship, note } }) }] };
+}
+function tool_checkout_summary(_args, sid) {
+  const method = paymentPref.get(sid) || null;
+  const { items, subtotalInINR } = computeCart(sid);
+  const coupon = coupons.get(sid) || null;
+  const d = computeDiscount(subtotalInINR, coupon);
+  const shippingInINR = deriveShipping(subtotalInINR, d.freeship);
+  const codChargeInINR = (method === 'COD') ? COD_CHARGE : 0;
+  const totalInINR = Math.max(0, subtotalInINR - d.discount) + shippingInINR + codChargeInINR;
+
+  const book = ensureAddrBook(sid);
+  const selectedIdx = addrSelected.get(sid);
+  const selectedAddress = (typeof selectedIdx === 'number') ? book[selectedIdx] : null;
+  const email = (profiles.get(sid) || {}).email || null;
+
+  const summary = {
+    items, subtotalInINR,
+    coupon, discountInINR: d.discount,
+    shippingInINR, codChargeInINR, totalInINR,
+    paymentMethod: method,
+    email,
+    addressCount: book.length,
+    selectedAddress
+  };
+  return { content: [{ type: 'text', text: JSON.stringify(summary) }] };
+}
+
+/** -------- Create order & Pay -------- */
+function tool_checkout_create_order(_args, sid) {
+  const { items, subtotalInINR } = computeCart(sid);
+  if (items.length === 0) throw { code: -32010, message: 'Cart is empty' };
+
+  // ✅ If no payment method selected, DEFAULT to COD (as per your requirement)
+  let method = paymentPref.get(sid) || 'COD';
+  paymentPref.set(sid, method);
+
+  // Address must exist; if one, auto-select; if many & none chosen, ask to select
+  const book = ensureAddrBook(sid);
+  if (book.length === 0) throw { code: -32602, message: 'No address available. Add an address before checkout.' };
+  let selectedIdx = addrSelected.get(sid);
+  if (typeof selectedIdx !== 'number') {
+    if (book.length === 1) {
+      addrSelected.set(sid, 0);
+      selectedIdx = 0;
+    } else {
+      throw { code: -32602, message: 'Multiple addresses found. Please select one.' };
+    }
   }
 
-  const shippingInINR = subtotal >= 499 ? 0 : 30;
-  const totalInINR = subtotal + shippingInINR;
+  // Discounts / shipping
+  const coupon = coupons.get(sid) || null;
+  const d = computeDiscount(subtotalInINR, coupon);
+  const shippingInINR = deriveShipping(subtotalInINR, d.freeship);
 
-  carts.set(sid, new Map()); // clear cart after order (mock)
-  lastOrders.set(sid, { orderId, totalInINR, items });
+  // ✅ COD charge added only for COD
+  const codChargeInINR = (method === 'COD') ? COD_CHARGE : 0;
 
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        orderId,
-        items,
-        subtotalInINR: subtotal,
-        shippingInINR,
-        totalInINR,
-        status: 'CONFIRMED (MOCK)'
-      })
-    }]
+  const totalInINR = Math.max(0, subtotalInINR - d.discount) + shippingInINR + codChargeInINR;
+
+  const orderId = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const summary = {
+    orderId,
+    items,
+    subtotalInINR,
+    discountInINR: d.discount,
+    shippingInINR,
+    codChargeInINR,
+    totalInINR,
+    paymentMethod: method,
+    address: book[selectedIdx],
+    merchant: MERCHANT,
+    status: method === 'COD' ? 'CONFIRMED (COD-PENDING)' : 'CONFIRMED (ONLINE-PAYMENT-PENDING)',
+    message: (method === 'COD')
+      ? `Thank you! Your COD order ${orderId} is confirmed. A ₹${COD_CHARGE} COD delivery charge applies.`
+      : `Order ${orderId} created. Proceed to pay via link.`
   };
+
+  // clear cart on order creation (mock)
+  carts.set(sid, new Map());
+  lastOrders.set(sid, { orderId, totalInINR, items, paymentMethod: method });
+
+  return { content: [{ type: 'text', text: JSON.stringify(summary) }] };
 }
+
 
 function tool_checkout_pay(args, sid) {
   const requestedId = args?.orderId;
   const last = lastOrders.get(sid);
-
   const orderId = requestedId || last?.orderId;
-  if (!orderId) throw { code: -32011, message: 'No recent order to pay for. Create order first.' };
+  if (!orderId) throw { code: -32011, message: 'No recent order to pay for.' };
 
   const txnId = 'TXN-' + Math.random().toString(36).slice(2, 8).toUpperCase();
   const paidAt = new Date().toISOString();
 
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({ orderId, transactionId: txnId, paidAt, status: 'PAID (MOCK)' })
-    }]
-  };
+  return { content: [{ type: 'text', text: JSON.stringify({ orderId, transactionId: txnId, paidAt, status: 'PAID (MOCK)' }) }] };
 }
 
 /** -------- Dispatcher (canonical + alias names) -------- */
 function handleToolsCall(_methodName, params, sid) {
   const { name, arguments: args } = params || {};
   switch (name) {
-    // Canonical
+    // Inventory/Search
     case 'inventory_list':         return tool_inventory_list(args);
     case 'product_search':         return tool_product_search(args);
     case 'product_fetch':          return tool_product_fetch(args);
+    case 'inventory/list':         return tool_inventory_list(args); // alias
+    case 'search':                 return tool_product_search(args); // alias
+    case 'fetch':                  return tool_product_fetch(args);  // alias
+
+    // Cart
     case 'cart_add':               return tool_cart_add(args, sid);
     case 'cart_get':               return tool_cart_get(args, sid);
     case 'cart_clear':             return tool_cart_clear(args, sid);
-    case 'checkout_create_order':  return tool_checkout_create_order(args, sid);
-    case 'checkout_pay':           return tool_checkout_pay(args, sid);
+    case 'cart/add':               return tool_cart_add(args, sid);  // alias
+    case 'cart/get':               return tool_cart_get(args, sid);  // alias
+    case 'cart/clear':             return tool_cart_clear(args, sid);// alias
 
-    // Aliases (backward compat)
-    case 'inventory/list':         return tool_inventory_list(args);
-    case 'search':                 return tool_product_search(args);
-    case 'fetch':                  return tool_product_fetch(args);
-    case 'cart/add':               return tool_cart_add(args, sid);
-    case 'cart/get':               return tool_cart_get(args, sid);
-    case 'cart/clear':             return tool_cart_clear(args, sid);
-    case 'checkout/create_order':  return tool_checkout_create_order(args, sid);
-    case 'checkout/pay':           return tool_checkout_pay(args, sid);
+    // Agentic checkout helpers
+    case 'payment_choose':         return tool_payment_choose(args, sid);
+    case 'profile_set_email':      return tool_profile_set_email(args, sid);
+    case 'address_add':            return tool_address_add(args, sid);
+    case 'address_list':           return tool_address_list(args, sid);
+    case 'address_select':         return tool_address_select(args, sid);
+    case 'coupon_apply':           return tool_coupon_apply(args, sid);
+    case 'checkout_summary':       return tool_checkout_summary(args, sid);
+
+    // Order & Pay
+    case 'checkout_create_order':  return tool_checkout_create_order(args, sid);
+    case 'payment_create_link':    return tool_payment_create_link(args, sid);
+    case 'checkout_pay':           return tool_checkout_pay(args, sid);
+    case 'checkout/create_order':  return tool_checkout_create_order(args, sid); // alias
+    case 'checkout/pay':           return tool_checkout_pay(args, sid);         // alias
 
     default:
       throw { code: -32601, message: `Unknown tool: ${name}` };
@@ -745,8 +989,8 @@ app.post('/mcp', (req, res) => {
       return res.json(jsonrpcOk(id, {
         protocolVersion,
         capabilities: { tools: { listChanged: true } }, // force rebuild of actions
-        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server', version: '1.0.2' },
-        instructions: 'Use inventory_list / product_search / product_fetch, cart_* and checkout_* tools.'
+        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server', version: '1.0.3' },
+        instructions: 'Flow: Ask payment method (ONLINE/COD). If none is chosen, checkout_create_order defaults to COD. For ONLINE, after order creation call payment_create_link (uses default buyer email if not set). Always show checkout_summary before order. Include merchant info to the user.'
       }));
     }
 
@@ -823,8 +1067,8 @@ app.post('/sse', (req, res) => {
       return res.json(jsonrpcOk(id, {
         protocolVersion: '2024-11-05',
         capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server (Legacy)', version: '1.0.2' },
-        instructions: 'Use inventory_list / product_search / product_fetch, cart_* and checkout_* tools.'
+        serverInfo: { name: 'Ecommer-pay MCP', title: 'Ecommer-pay Grocery Server (Legacy)', version: '1.0.3' },
+        instructions: 'Flow: Ask payment method (ONLINE/COD). If none is chosen, checkout_create_order defaults to COD. For ONLINE, after order creation call payment_create_link (uses default buyer email if not set). Always show checkout_summary before order. Include merchant info to the user.'
       }));
     }
     if (method === 'tools/list') {
